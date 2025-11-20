@@ -1,0 +1,11 @@
+
+AZURE_OPENAI_ENDPOINT = "https://{your-custom-endpoint}.openai.azure.com/" # or your Azure Government endpoint
+AZURE_OPENAI_MODEL = "your-deployment-name"
+AZURE_OPENAI_API_KEY = "your-api-key"
+AZURE_OPENAI_API_VERSION = "2024-02-15-preview"
+
+# For deployment as an app service, use Managed Identity authentication
+AZURE_SQL_CONNECTIONSTRING="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<yourserver>.database.usgovcloudapi.net,1433;Database=<yourdatabase>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;Authentication=ActiveDirectoryMsi"
+
+# For local Development, use ActiveDirectoryInteractive
+AZURE_SQL_CONNECTIONSTRING="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<yourserver>.database.usgovcloudapi.net,1433;Database=<yourdatabase>;Encrypt=yes;Uid=<yourusername>;TrustServerCertificate=no;Connection Timeout=30;Authentication=ActiveDirectoryInteractive"
