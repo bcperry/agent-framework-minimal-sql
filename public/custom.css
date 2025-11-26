@@ -1,0 +1,44 @@
+/* Custom logo styling for Chainlit app */
+
+/* Add logo to the app header */
+.cl-header .cl-app-name::before {
+    content: '';
+    background-image: url('/public/logo_light.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    width: 48px;
+    height: 48px;
+    display: inline-block;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+/* Alternative: Replace the entire header with logo */
+.cl-header .cl-app-name {
+    display: flex;
+    align-items: center;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+/* Style for mobile responsiveness */
+@media (max-width: 768px) {
+    .cl-header .cl-app-name::before {
+        width: 36px;
+        height: 36px;
+    }
+}
+
+/* Chat Profile Icon Styling - Make the profile icon larger */
+/* Target the specific image in the chat profile selector */
+
+/* Welcome screen army logo (the large one in center) */
+#welcome-screen img[src*="logo_dark.png"] {
+    width: 256px !important;
+    height: 256px !important;
+    border-radius: 0 !important;
+    padding: 20px !important;
+    object-fit: contain !important;
+}
+
+

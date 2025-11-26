@@ -1,6 +1,6 @@
 import os
+import chainlit as cl
 import logging
-import asyncio
 from dotenv import load_dotenv
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatAgent
@@ -12,8 +12,36 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def main(stream: bool = True) -> None:
-    logger.info("Hello from agent-framework-minimal-sql!")
+@cl.set_starters
+async def set_starters():
+    return [
+        cl.Starter(
+            label="List all database tables",
+            message="What tables are available in the database?",
+            icon="/public/logo_light.png",
+        ),
+        cl.Starter(
+            label="Show table schema",
+            message="Can you describe the schema of the first table you find?",
+            icon="/public/logo_light.png",
+        ),
+        cl.Starter(
+            label="Query top records",
+            message="Show me the first 10 records from any table in the database.",
+            icon="/public/logo_light.png",
+        ),
+        cl.Starter(
+            label="Database overview",
+            message="Give me an overview of the database structure including all tables and their key columns.",
+            icon="/public/logo_light.png",
+        ),
+    ]
+
+
+@cl.on_chat_start
+async def on_chat_start():
+    # Setup Semantic Kernel
+    logger.info("Initializing app")
 
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     deployment_name = os.getenv("AZURE_OPENAI_MODEL", "")
@@ -57,99 +85,79 @@ def main(stream: bool = True) -> None:
     agent = ChatAgent(
         chat_client=llm,
         name="agent_name",
-        instructions="Your instructions here",
+        instructions="You are a helpful assistant with database tools. Follow these rules strictly:\n\
+1. ALWAYS use your tools to answer questions - never rely on assumptions or general knowledge\n\
+2. NEVER make up information - if you don't have data from a tool, say so\n\
+3. Follow ALL step-by-step instructions in tool docstrings exactly - including STEP 3a before STEP 3b\n\
+4. If a tool says REQUIRED or DO NOT skip, you MUST comply with that instruction\n\
+5. Provide clear, concise responses based only on verified tool results",
         tools=[db_tool.list_tables, db_tool.describe_table, db_tool.read_query],
-        temperature=0.7,
+        temperature=0.1,
     )
 
     thread = agent.get_new_thread()
 
-    chat_with_agent(agent, thread)
+    cl.user_session.set("agent", agent)
+    cl.user_session.set("thread", thread)
 
 
-def chat_with_agent(agent: ChatAgent, thread, stream=True) -> None:
-    print("=== Command Line Agent ===")
-    print("Type 'exit' or 'quit' to stop chatting.\n")
+@cl.on_message
+async def on_message(message: cl.Message):
+    agent = cl.user_session.get("agent")
+    thread = cl.user_session.get("thread")
 
-    while True:
-        try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nExiting chat.")
-            break
+    # Create a Chainlit message for the response stream
+    answer = None
 
-        if not user_input:
-            continue
+    active_steps = {}
+    current_call_id = None
 
-        if user_input.lower() in {"exit", "quit"}:
-            print("Goodbye!")
-            break
+    async for msg in agent.run_stream(message.content, thread=thread):
+        logging.info(f"Agent message: {msg.to_json()}")
 
-        print("Agent: ", end="", flush=True)
-        try:
-            asyncio.run(stream_response(agent, thread, user_input))
-        except Exception as exc:  # Surface connection issues without crashing the loop
-            logger.exception("Streaming response failed")
-            print(f"[Error: {exc.__class__.__name__}: {exc}]")
-        print()  # Newline after agent response
+        msg_dict = msg.to_dict()
+        if msg_dict.get("type") == "agent_run_response_update":
+            for content in msg_dict.get("contents", []):
+                content_type = content.get("type")
 
+                if content_type == "function_call":
+                    # If we were streaming an answer, finalize it and reset
+                    if answer:
+                        await answer.update()
+                        answer = None
 
-async def stream_response(agent: ChatAgent, thread: str, user_input: str) -> None:
-    # Consume the agent's async stream and print tokens as they arrive.
-    function_calls = {}  # Track function calls by call_id
-
-    async for chunk in agent.run_stream(user_input, thread=thread):
-        if chunk.text:
-            print(chunk.text, end="", flush=True)
-        else:
-            # Extract function call info from contents
-            chunk_dict = chunk.to_dict()
-            contents = chunk_dict.get("contents", [])
-
-            for content in contents:
-                if content.get("type") == "function_call":
-                    call_id = content.get("call_id", "")
-                    name = content.get("name", "")
+                    call_id = content.get("call_id")
+                    name = content.get("name")
                     arguments = content.get("arguments", "")
 
-                    # Initialize function call tracking with a real call_id
-                    if call_id and call_id not in function_calls:
-                        function_calls[call_id] = {
-                            "name": name,
-                            "arguments": "",
-                            "printed": False,
-                        }
+                    if name:
+                        step = cl.Step(name=name, type="tool", parent_id=message.id)
+                        step.input = arguments
+                        if call_id:
+                            active_steps[call_id] = step
+                            current_call_id = call_id
+                        await step.send()
+                    else:
+                        target_id = call_id if call_id else current_call_id
+                        if target_id and target_id in active_steps:
+                            active_steps[target_id].input += arguments
+                            await active_steps[target_id].update()
 
-                    # Update existing call with streaming data
-                    if call_id:
-                        if name:
-                            function_calls[call_id]["name"] = name
-                        if arguments:
-                            function_calls[call_id]["arguments"] += arguments
-                    # Empty call_id means streaming is complete for the last call
-                    elif arguments and function_calls:
-                        # Add to the most recent function call
-                        last_call_id = list(function_calls.keys())[-1]
-                        function_calls[last_call_id]["arguments"] += arguments
+                elif content_type == "function_result":
+                    call_id = content.get("call_id")
+                    result = content.get("result")
+                    if call_id in active_steps:
+                        active_steps[call_id].output = result
+                        await active_steps[call_id].update()
+                        del active_steps[call_id]
 
-            # After processing all contents, print any completed calls
-            for call_id, call_info in function_calls.items():
-                if call_info["name"] and not call_info["printed"]:
-                    # Check if this call is complete (next chunk has empty contents or different call_id)
-                    # For now, print when we have both name and some indication of completion
-                    if (
-                        call_id
-                        and len(call_info["arguments"]) > 0
-                        and call_info["arguments"].endswith("}")
-                    ):
-                        print(
-                            f"\n[Tool: {call_info['name']}({call_info['arguments']})]",
-                            end="",
-                            flush=True,
-                        )
-                        call_info["printed"] = True
-                        print()
+        if getattr(msg, "text", None):
+            if answer is None:
+                answer = cl.Message(content="")
+            await answer.stream_token(msg.text)
 
+    # Send the final message if not already sent
+    if answer:
+        await answer.send()
 
-if __name__ == "__main__":
-    main()
+    cl.user_session.set("thread", thread)

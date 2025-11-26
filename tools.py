@@ -80,7 +80,7 @@ class SqlDatabase:
     ) -> str:
         """Get the schema information for a specific table.
 
-        STEP 2: After using list_tables, use this to get column names, data types, max lengths,
+        STEP 2: After using list_tables, you MUST use this to get column names, data types, max lengths,
         nullability, primary keys, and foreign keys for a specific table in the Azure SQL (T-SQL) database.
         This information is essential before executing read_query or write_query.
         """
@@ -134,14 +134,17 @@ class SqlDatabase:
     ) -> str:
         """Execute a SELECT query on the SQL database.
 
-        STEP 3: After understanding table schemas with describe_table, use this to query data.
-        Executes T-SQL SELECT statements on the Azure SQL database.
-        Use table schemas from describe_table to construct accurate queries with correct column names and types.
+        REQUIRED WORKFLOW:
+        STEP 3a: First, query distinct values for any columns you plan to filter on.
+                 Example: SELECT DISTINCT status FROM orders
+                 Example: SELECT DISTINCT category FROM products
+                 This shows you what values actually exist in the database.
 
-        CRITICAL: Before writing any WHERE clause or filtering condition, you MUST execute
-        "SELECT DISTINCT column_name FROM table_name" queries to see what values actually exist
-        in the database. This is NOT optional. Always verify the actual data values before
-        constructing filters to avoid empty results or incorrect assumptions about the data.
+        STEP 3b: After verifying actual values exist, construct your filtered query.
+                 Use ONLY the exact values you found in step 3a for WHERE clauses.
+
+        DO NOT skip step 3a. DO NOT assume what values exist. DO NOT filter without first checking.
+        Executes T-SQL SELECT statements on the Azure SQL database.
         """
 
         # Normalize the query for checking
@@ -150,6 +153,13 @@ class SqlDatabase:
         # Only allow SELECT statements
         if not normalized_query.startswith("SELECT"):
             raise ValueError("Only SELECT queries are allowed for read_query")
+
+        # Check if this is a filtered/aggregation query without having checked distinct values first
+        has_where = "WHERE" in normalized_query
+        has_count = "COUNT(" in normalized_query
+        has_sum = "SUM(" in normalized_query
+        has_avg = "AVG(" in normalized_query
+        has_group_by = "GROUP BY" in normalized_query
 
         # Block dangerous keywords that could modify data or schema
         dangerous_keywords = [
@@ -179,7 +189,20 @@ class SqlDatabase:
 
         # Execute the query
         results = self._execute_query(query)
-        return str(results)
+
+        if has_where or has_count or has_sum or has_avg or has_group_by:
+            return (
+                f"Your results are: {str(results)}\n"
+                "NOTE: You are attempting to filter or aggregate data"
+                "Although this query completed, please make sure you have:\n"
+                "1. Run SELECT DISTINCT queries on any columns you filter on\n"
+                "2. Verify the actual values that exist in the database\n"
+                "3. Then construct your filtered/aggregated query using only those verified values\n\n"
+                "If you have not performed these steps, you will need to reattempt your query. "
+                "Do NOT proceed without checking distinct values first."
+            )
+        else:
+            return str(results)
 
 
 # # from sqlite_db import SqliteDatabase
