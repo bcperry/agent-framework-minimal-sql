@@ -127,6 +127,10 @@ class SqlDatabase:
         foreign_keys = self._execute_query(fk_query)
 
         result = f"Columns:\n{columns}\n\nPrimary Keys:\n{primary_keys}\n\nForeign Keys:\n{foreign_keys}"
+
+        if len(columns) == 0:
+            return f"Table '{table_name}' not found or has no columns, ensure you are using the correct table name as defined in the list_tables tool."
+
         return result
 
     def read_query(
