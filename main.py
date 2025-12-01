@@ -12,28 +12,62 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-@cl.set_starters
-async def set_starters():
+@cl.set_chat_profiles
+async def chat_profile():
     return [
-        cl.Starter(
-            label="List all database tables",
-            message="What tables are available in the database?",
-            icon="/public/logo_light.png",
+        cl.ChatProfile(
+            name="Maintenance Data Bot",
+            markdown_description="Get responses grounded on Maintenance data.",
+            icon="public/logo_dark.png",
+            starters=[
+                cl.Starter(
+                    label="List maintenance records",
+                    message="What maintenance records are available in the database?",
+                    icon="/public/logo_light.png",
+                ),
+                cl.Starter(
+                    label="Show maintenance schema",
+                    message="Can you describe the schema of the maintenance table?",
+                    icon="/public/logo_light.png",
+                ),
+                cl.Starter(
+                    label="Query recent maintenance",
+                    message="Show me the last 10 maintenance records from the database.",
+                    icon="/public/logo_light.png",
+                ),
+                cl.Starter(
+                    label="Maintenance overview",
+                    message="Give me an overview of the maintenance data structure including key columns.",
+                    icon="/public/logo_light.png",
+                ),
+            ],
         ),
-        cl.Starter(
-            label="Show table schema",
-            message="Can you describe the schema of the first table you find?",
-            icon="/public/logo_light.png",
-        ),
-        cl.Starter(
-            label="Query top records",
-            message="Show me the first 10 records from any table in the database.",
-            icon="/public/logo_light.png",
-        ),
-        cl.Starter(
-            label="Database overview",
-            message="Give me an overview of the database structure including all tables and their key columns.",
-            icon="/public/logo_light.png",
+        cl.ChatProfile(
+            name="Synapse Data Bot",
+            markdown_description="Get responses grounded on Azure Synapse Data.",
+            icon="public/logo_dark.png",
+            starters=[
+                cl.Starter(
+                    label="List all database tables",
+                    message="What tables are available in the database?",
+                    icon="/public/logo_light.png",
+                ),
+                cl.Starter(
+                    label="Show table schema",
+                    message="Can you describe the schema of the first table you find?",
+                    icon="/public/logo_light.png",
+                ),
+                cl.Starter(
+                    label="Query top records",
+                    message="Show me the first 10 records from any table in the database.",
+                    icon="/public/logo_light.png",
+                ),
+                cl.Starter(
+                    label="Database overview",
+                    message="Give me an overview of the database structure including all tables and their key columns.",
+                    icon="/public/logo_light.png",
+                ),
+            ],
         ),
     ]
 
@@ -41,6 +75,7 @@ async def set_starters():
 @cl.on_chat_start
 async def on_chat_start():
     # Setup Semantic Kernel
+
     logger.info("Initializing app")
 
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
