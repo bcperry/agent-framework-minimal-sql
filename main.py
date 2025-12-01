@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatAgent
 from tools import SqlDatabase
+from rag_tools import semantic_search, list_facets
 
 load_dotenv()
 
@@ -14,30 +15,38 @@ logger = logging.getLogger(__name__)
 
 @cl.set_chat_profiles
 async def chat_profile():
+    base_starter = [
+        cl.Starter(
+            label="What can this Agent do?",
+            message="What can you do, and what tools do you have available?",
+            icon="/public/azure.png",
+        ),
+    ]
     return [
         cl.ChatProfile(
             name="Maintenance Data Bot",
             markdown_description="Get responses grounded on Maintenance data.",
             icon="public/logo_dark.png",
-            starters=[
+            starters=base_starter
+            + [
                 cl.Starter(
-                    label="List maintenance records",
-                    message="What maintenance records are available in the database?",
+                    label="Yearly maintenance requirements",
+                    message="What yearly maintenance is required for the M1 Abrams?",
                     icon="/public/logo_light.png",
                 ),
                 cl.Starter(
-                    label="Show maintenance schema",
-                    message="Can you describe the schema of the maintenance table?",
+                    label="How to replace parts",
+                    message="Can you describe how to replace the oil filter on a HMMWV?",
                     icon="/public/logo_light.png",
                 ),
                 cl.Starter(
-                    label="Query recent maintenance",
-                    message="Show me the last 10 maintenance records from the database.",
+                    label="What maintenance manuals are available",
+                    message="What maintenance manuals are available for the UH-60 Helicopter?",
                     icon="/public/logo_light.png",
                 ),
                 cl.Starter(
-                    label="Maintenance overview",
-                    message="Give me an overview of the maintenance data structure including key columns.",
+                    label="What documents are in the repository",
+                    message="Give me an overview of the documents in the Azure AI Search repository.",
                     icon="/public/logo_light.png",
                 ),
             ],
@@ -46,7 +55,9 @@ async def chat_profile():
             name="Synapse Data Bot",
             markdown_description="Get responses grounded on Azure Synapse Data.",
             icon="public/logo_dark.png",
-            starters=[
+            default=True,
+            starters=base_starter
+            + [
                 cl.Starter(
                     label="List all database tables",
                     message="What tables are available in the database?",
@@ -62,9 +73,17 @@ async def chat_profile():
                     message="Show me the first 10 records from any table in the database.",
                     icon="/public/logo_light.png",
                 ),
+            ],
+        ),
+        cl.ChatProfile(
+            name="Everything Bot",
+            markdown_description="Get responses grounded on all available data sources.",
+            icon="public/logo_dark.png",
+            starters=base_starter
+            + [
                 cl.Starter(
-                    label="Database overview",
-                    message="Give me an overview of the database structure including all tables and their key columns.",
+                    label="Based on my database, what vehicles need maintenance, and what documents are relevant?",
+                    message="Based on my database, what vehicles need maintenance, and what documents are relevant?",
                     icon="/public/logo_light.png",
                 ),
             ],
@@ -126,20 +145,39 @@ async def on_chat_start():
 3. Follow ALL step-by-step instructions in tool docstrings exactly - including STEP 3a before STEP 3b\n\
 4. If a tool says REQUIRED or DO NOT skip, you MUST comply with that instruction\n\
 5. Provide clear, concise responses based only on verified tool results",
-        tools=[db_tool.list_tables, db_tool.describe_table, db_tool.read_query],
         temperature=0.1,
     )
+
+    db_tools = [db_tool.list_tables, db_tool.describe_table, db_tool.read_query]
+    search_tools = [semantic_search, list_facets]
 
     thread = agent.get_new_thread()
 
     cl.user_session.set("agent", agent)
+    cl.user_session.set("db_tools", db_tools)
+    cl.user_session.set("ai_search", search_tools)
     cl.user_session.set("thread", thread)
 
 
 @cl.on_message
 async def on_message(message: cl.Message):
     agent = cl.user_session.get("agent")
+    tools = cl.user_session.get("tools")
     thread = cl.user_session.get("thread")
+
+    profile = cl.user_session.get("chat_profile")
+
+    logging.info(f"Current chat profile: {profile if profile else 'None'}")
+    if profile == "Maintenance Data Bot":
+        tools = cl.user_session.get("ai_search")
+
+    elif profile == "Synapse Data Bot":
+        tools = cl.user_session.get("db_tools")
+
+    else:
+        db_tools = cl.user_session.get("db_tools")
+        ai_search = cl.user_session.get("ai_search")
+        tools = db_tools + ai_search
 
     # Create a Chainlit message for the response stream
     answer = None
@@ -147,7 +185,7 @@ async def on_message(message: cl.Message):
     active_steps = {}
     current_call_id = None
 
-    async for msg in agent.run_stream(message.content, thread=thread):
+    async for msg in agent.run_stream(message.content, tools=tools, thread=thread):
         logging.info(f"Agent message: {msg.to_json()}")
 
         msg_dict = msg.to_dict()

@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "agent-framework>=1.0.0b251114",
     "azure-ai-agents>=1.2.0b5",
+    "azure-search-documents>=11.6.0",
     "chainlit>=2.9.2",
     "pyodbc>=5.3.0",
 ]

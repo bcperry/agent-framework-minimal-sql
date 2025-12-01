@@ -94,12 +94,15 @@ azure-ai-agents==1.2.0b5
     #   azure-ai-projects
 azure-ai-projects==1.0.0
     # via agent-framework-azure-ai
+azure-common==1.1.28
+    # via azure-search-documents
 azure-core==1.36.0
     # via
     #   agent-framework-purview
     #   azure-ai-agents
     #   azure-ai-projects
     #   azure-identity
+    #   azure-search-documents
     #   azure-storage-blob
     #   microsoft-agents-hosting-core
 azure-functions==1.24.0
@@ -110,6 +113,8 @@ azure-functions-durable==1.4.0
     # via agent-framework-azurefunctions
 azure-identity==1.25.1
     # via agent-framework-core
+azure-search-documents==11.6.0
+    # via agent-framework-minimal-sql
 azure-storage-blob==12.27.1
     # via azure-ai-projects
 backoff==2.2.1
@@ -268,6 +273,7 @@ isodate==0.7.2
     # via
     #   azure-ai-agents
     #   azure-ai-projects
+    #   azure-search-documents
     #   azure-storage-blob
     #   microsoft-agents-hosting-core
 jedi==0.19.2
@@ -835,6 +841,7 @@ typing-extensions==4.15.0
     #   azure-ai-projects
     #   azure-core
     #   azure-identity
+    #   azure-search-documents
     #   azure-storage-blob
     #   fastapi
     #   grpcio
