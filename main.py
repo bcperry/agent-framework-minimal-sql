@@ -55,7 +55,6 @@ async def chat_profile():
             name="Synapse Data Bot",
             markdown_description="Get responses grounded on Azure Synapse Data.",
             icon="public/logo_dark.png",
-            default=True,
             starters=base_starter
             + [
                 cl.Starter(

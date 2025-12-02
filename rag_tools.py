@@ -136,8 +136,17 @@ async def list_facets(
     Raises:
         RuntimeError: If the search service is unreachable or the field is not facetable.
     """
-
-    client = _get_search_client()
+    try:
+        client = _get_search_client()
+    except Exception as e:
+        logger.exception("Failed to create SearchClient")
+        error_msg = f"Failed to create Search Client with error: {str(e)}"
+        return {
+            "error": error_msg,
+            "facet": facet_name,
+            "search_text": search_text,
+            "values": [],
+        }
 
     def _run() -> List[Dict[str, Any]]:
         results = client.search(
@@ -152,9 +161,20 @@ async def list_facets(
         values = await asyncio.to_thread(_run)
     except HttpResponseError as exc:
         logger.exception("Facet retrieval failed for %s", facet_name)
-        raise RuntimeError(
-            f"Failed to retrieve facets for '{facet_name}': {str(exc)}"
-        ) from exc
+        return {
+            "error": f"Failed to retrieve facets for '{facet_name}': {str(exc)}",
+            "facet": facet_name,
+            "search_text": search_text,
+            "values": [],
+        }
+    except Exception as exc:
+        logger.exception("Unexpected error in list_facets")
+        return {
+            "error": f"Unexpected error: {str(exc)}",
+            "facet": facet_name,
+            "search_text": search_text,
+            "values": [],
+        }
 
     return {
         "facet": facet_name,
@@ -229,7 +249,21 @@ async def semantic_search(
     if top <= 0:
         raise ValueError("top must be greater than zero")
 
-    client = _get_search_client()
+    try:
+        client = _get_search_client()
+    except Exception as e:
+        logger.exception("Failed to create SearchClient")
+        error_msg = f"Failed to create Search Client with error: {str(e)}"
+        return {
+            "error": error_msg,
+            "query": query,
+            "query_type": query_type,
+            "top": top,
+            "filter": None,
+            "select": select_fields or _DEFAULT_SELECT_FIELDS,
+            "total_count": 0,
+            "documents": [],
+        }
     select = select_fields or _DEFAULT_SELECT_FIELDS
     allowed_query_types = {"semantic", "simple"}
     if query_type not in allowed_query_types:
@@ -266,6 +300,27 @@ async def semantic_search(
         payload = await asyncio.to_thread(_run)
     except HttpResponseError as exc:
         logger.exception("Search request failed for query '%s'", query)
-        raise RuntimeError(f"Search request failed: {str(exc)}") from exc
+        return {
+            "error": f"Search request failed: {str(exc)}",
+            "query": query,
+            "query_type": query_type,
+            "top": top,
+            "filter": filter_expression,
+            "select": select,
+            "total_count": 0,
+            "documents": [],
+        }
+    except Exception as exc:
+        logger.exception("Unexpected error in semantic_search")
+        return {
+            "error": f"Unexpected error: {str(exc)}",
+            "query": query,
+            "query_type": query_type,
+            "top": top,
+            "filter": filter_expression,
+            "select": select,
+            "total_count": 0,
+            "documents": [],
+        }
 
     return payload
