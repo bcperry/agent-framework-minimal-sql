@@ -186,7 +186,7 @@ async def on_message(message: cl.Message):
     current_call_id = None
 
     async for msg in agent.run_stream(message.content, tools=tools, thread=thread):
-        logging.info(f"Agent message: {msg.to_json()}")
+        # logging.info(f"Agent message: {msg.to_json()}")
 
         msg_dict = msg.to_dict()
         if msg_dict.get("type") == "agent_run_response_update":

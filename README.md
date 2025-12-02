@@ -75,6 +75,103 @@ The Azure SQL connection string should follow this format:
 Driver={ODBC Driver 18 for SQL Server};Server=tcp:<server>.database.windows.net,1433;Database=<database>;Uid=<username>;Pwd=<password>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;
 ```
 
+## Deployment to Azure App Service
+
+This application can be deployed to Azure App Service using the Azure Developer CLI (azd).
+
+### Prerequisites for Deployment
+
+- [Azure Developer CLI (azd)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) installed
+- Azure subscription
+- Azure OpenAI resource deployed
+- Azure SQL Database configured
+- Azure AI Search service configured
+
+### Deployment with Azure Developer CLI
+
+**1. Initialize the environment:**
+
+```powershell
+azd init
+```
+
+When prompted, use an existing environment name or create a new one (e.g., `dev`).
+
+**2. Provision and deploy in one command:**
+
+```powershell
+azd up
+```
+
+This will:
+- Create an Azure Resource Group
+- Create an App Service Plan (Linux, B1 SKU)
+- Create an App Service with Python 3.12 runtime
+- Configure managed identity
+- Enable WebSocket support (required for Chainlit)
+- Deploy your application code
+
+**3. Configure environment variables:**
+
+After deployment, set the required environment variables in the Azure Portal or using azd:
+
+```powershell
+azd env set AZURE_OPENAI_ENDPOINT "https://your-resource.openai.azure.com/"
+azd env set AZURE_OPENAI_MODEL "your-deployment-name"
+azd env set AZURE_OPENAI_API_KEY "your-api-key"
+azd env set AZURE_OPENAI_API_VERSION "2024-08-01-preview"
+azd env set AZURE_SQL_CONNECTIONSTRING "Driver={ODBC Driver 18 for SQL Server};Server=tcp:your-server.database.windows.net,1433;Database=your-database;Uid=your-username;Pwd=your-password;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+azd env set SEARCH_SERVICE_ENDPOINT "https://your-search-service.search.windows.net"
+azd env set SEARCH_INDEX_NAME "your-index-name"
+```
+
+Then deploy again to apply the settings:
+
+```powershell
+azd deploy
+```
+
+### Alternative: Step-by-Step Deployment
+
+**Provision infrastructure only:**
+```powershell
+azd provision
+```
+
+**Deploy application code only:**
+```powershell
+azd deploy
+```
+
+### Managing Your Deployment
+
+**View deployment logs:**
+```powershell
+azd monitor
+```
+
+**Open the deployed app:**
+```powershell
+azd browse
+```
+
+**View all resources:**
+```powershell
+azd show
+```
+
+**Clean up resources:**
+```powershell
+azd down
+```
+
+### Important Notes
+
+- **ODBC Drivers**: Azure App Service Linux includes ODBC Driver 18 for SQL Server by default
+- **WebSockets**: WebSocket support is automatically enabled for Chainlit
+- **Managed Identity**: A user-assigned managed identity is created and can be used for secure access to Azure resources
+- **Environment Variables**: Configure sensitive values using `azd env set` or Azure Portal App Settings
+
 ## Usage
 
 ### Running the Command-Line Interface (main.py)

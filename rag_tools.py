@@ -11,6 +11,7 @@ from azure.core.exceptions import HttpResponseError
 from azure.identity import AzureAuthorityHosts, DefaultAzureCredential
 from azure.search.documents import SearchClient
 from dotenv import load_dotenv
+from azure.core.credentials import AzureKeyCredential
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,15 @@ def _get_search_client(index_name: Optional[str] = None) -> SearchClient:
         authority_host,
     )
 
-    credential = DefaultAzureCredential(authority=authority_host)
+    search_api_key = os.getenv("SEARCH_API_KEY")
+    if not search_api_key:
+        credential = DefaultAzureCredential(authority=authority_host)
+        logging.info("Using DefaultAzureCredential for SearchClient authentication")
+        # raise RuntimeError("SEARCH_API_KEY is not defined in the environment")
+    else:
+        logging.info("Using API key for SearchClient authentication")
+        credential = AzureKeyCredential(search_api_key)
+
     return SearchClient(
         endpoint=search_endpoint,
         index_name=resolved_index,

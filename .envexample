@@ -12,3 +12,4 @@ AZURE_SQL_CONNECTIONSTRING="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<y
 
 SEARCH_SERVICE_ENDPOINT="https://{your-custom-endpoint}.search.azure.us" # or .com for Azure Public
 SEARCH_INDEX_NAME="{your-index-name}"
+SEARCH_API_KEY="{your-query-key}"
