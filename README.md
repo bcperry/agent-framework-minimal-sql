@@ -172,6 +172,36 @@ azd down
 - **Managed Identity**: A user-assigned managed identity is created and can be used for secure access to Azure resources
 - **Environment Variables**: Configure sensitive values using `azd env set` or Azure Portal App Settings
 
+### Configuring Database Access for Managed Identity
+
+After deploying the application, you need to grant the managed identity access to your Azure SQL Database. This requires running SQL commands on the database.
+
+**1. Connect to your Azure SQL Database** using Azure Data Studio, SQL Server Management Studio, or the Azure Portal Query Editor.
+
+**2. Create a database user for the managed identity:**
+
+Run the following SQL command, replacing `<app-service-name>` with the name of your App Service (this is the managed identity name):
+
+```sql
+-- Create a user for the App Service's managed identity
+CREATE USER [<app-service-name>] FROM EXTERNAL PROVIDER;
+
+-- Grant read permissions (adjust based on your needs)
+ALTER ROLE db_datareader ADD MEMBER [<app-service-name>];
+```
+
+The SQL scripts in the `sql_queries/` folder provide additional helpful commands:
+- `add_user.sql` - Template for adding a managed identity or Entra user
+- `db_principles.sql` - Query to view all database principals and their role memberships
+
+**3. Verify the user was created:**
+
+```sql
+SELECT name, type_desc FROM sys.database_principals WHERE type IN ('E', 'X');
+```
+
+**Note:** You must be connected as an Entra admin or have the appropriate permissions to create users from external providers.
+
 ## Usage
 
 ### Running the Command-Line Interface (main.py)

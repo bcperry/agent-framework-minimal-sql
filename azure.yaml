@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: agent-framework-minimal-sql
+metadata:
+  template: agent-framework-minimal-sql@0.0.1-beta
+
+services:
+  web:
+    project: .
+    language: python
+    host: appservice
+
+infra:
+  provider: terraform
+  path: infra
+  parameters:
+    environment_name: ${AZURE_ENV_NAME}
+    location: ${AZURE_LOCATION}
+    existing_resource_group_name: ${EXISTING_RESOURCE_GROUP_NAME}
+    azure_openai_endpoint: ${AZURE_OPENAI_ENDPOINT}
+    azure_openai_model: ${AZURE_OPENAI_MODEL}
+    azure_openai_api_key: ${AZURE_OPENAI_API_KEY}
+    azure_openai_api_version: ${AZURE_OPENAI_API_VERSION}
+    azure_sql_connectionstring: ${AZURE_SQL_CONNECTIONSTRING}
+    search_service_endpoint: ${SEARCH_SERVICE_ENDPOINT}
+    search_index_name: ${SEARCH_INDEX_NAME}
+    search_api_key: ${SEARCH_API_KEY}
+    
