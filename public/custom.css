@@ -41,4 +41,55 @@
     object-fit: contain !important;
 }
 
+/* Background image for the entire app - using pseudo-element for transparency */
+body {
+    position: relative !important;
+    min-height: 100vh !important;
+}
+
+body::before {
+    content: '' !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    background-image: url('/public/background.webp') !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    opacity: 0.3 !important;  /* Adjust this value: 0 = invisible, 1 = fully visible */
+    z-index: -1 !important;
+    pointer-events: none !important;
+}
+
+/* Make the main chat area transparent to show background */
+.cl-app-container,
+.MuiBox-root,
+main {
+    background-color: transparent !important;
+}
+
+/* Make chat messages area semi-transparent */
+.cl-chat-container {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(5px) !important;
+}
+
+/* Make message bubbles slightly transparent */
+.cl-message {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Make header semi-transparent */
+.cl-header {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    backdrop-filter: blur(5px) !important;
+}
+
+/* Make input area semi-transparent */
+.cl-input-container {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    backdrop-filter: blur(5px) !important;
+}
 

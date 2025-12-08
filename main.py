@@ -24,7 +24,7 @@ async def chat_profile():
     ]
     return [
         cl.ChatProfile(
-            name="Maintenance Data Bot",
+            name="Technical Maintenance AI",
             markdown_description="Get responses grounded on Maintenance data.",
             icon="public/logo_dark.png",
             starters=base_starter
@@ -52,7 +52,7 @@ async def chat_profile():
             ],
         ),
         cl.ChatProfile(
-            name="Synapse Data Bot",
+            name="Tactical Readiness AI",
             markdown_description="Get responses grounded on Azure Synapse Data.",
             icon="public/logo_dark.png",
             starters=base_starter
@@ -75,7 +75,7 @@ async def chat_profile():
             ],
         ),
         cl.ChatProfile(
-            name="Everything Bot",
+            name="Combat LogiGuard AI",
             markdown_description="Get responses grounded on all available data sources.",
             icon="public/logo_dark.png",
             starters=base_starter
