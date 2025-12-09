@@ -11,5 +11,8 @@
   "azure_sql_connectionstring": "${AZURE_SQL_CONNECTIONSTRING}",
   "search_service_endpoint": "${SEARCH_SERVICE_ENDPOINT}",
   "search_index_name": "${SEARCH_INDEX_NAME}",
-  "search_api_key": "${SEARCH_API_KEY}"
+  "search_api_key": "${SEARCH_API_KEY}",
+  "entra_client_id": "${ENTRA_CLIENT_ID}",
+  "entra_tenant_id": "${ENTRA_TENANT_ID}",
+  "entra_client_secret": "${ENTRA_CLIENT_SECRET}"
 }

@@ -16,3 +16,9 @@ AZURE_SQL_CONNECTIONSTRING="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<y
 SEARCH_SERVICE_ENDPOINT="https://{your-custom-endpoint}.search.azure.us" # or .com for Azure Public
 SEARCH_INDEX_NAME="{your-index-name}"
 SEARCH_API_KEY="{your-query-key}"
+
+OAUTH_AZURE_GOV_AD_CLIENT_ID="your-client-id"
+OAUTH_AZURE_GOV_AD_CLIENT_SECRET="your-client-secret"
+OAUTH_AZURE_GOV_AD_TENANT_ID="your-tenant-id"
+
+CHAINLIT_AUTH_SECRET="your-secret-key, can be created with chainlit create-secret"

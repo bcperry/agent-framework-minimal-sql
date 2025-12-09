@@ -1,16 +1,52 @@
 import os
 import chainlit as cl
 import logging
+from typing import Dict, Optional
 from dotenv import load_dotenv
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatAgent
 from tools import SqlDatabase
 from rag_tools import semantic_search, list_facets
+from custom_oauth import AzureGovOAuthProvider, AzureGovHybridOAuthProvider
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Register Azure Government OAuth providers by adding them to the module
+# These will be automatically discovered by Chainlit
+azure_gov_provider = AzureGovOAuthProvider()
+azure_gov_hybrid_provider = AzureGovHybridOAuthProvider()
+
+if azure_gov_provider.is_configured():
+    # Register the provider by importing it into the module namespace
+    import chainlit.oauth_providers as oauth_module
+
+    oauth_module.providers.append(azure_gov_provider)
+    logger.info("Registered Azure Government OAuth provider")
+
+if azure_gov_hybrid_provider.is_configured():
+    import chainlit.oauth_providers as oauth_module
+
+    oauth_module.providers.append(azure_gov_hybrid_provider)
+    logger.info("Registered Azure Government Hybrid OAuth provider")
+
+
+@cl.oauth_callback
+def oauth_callback(
+    provider_id: str,
+    token: str,
+    raw_user_data: Dict[str, str],
+    default_user: cl.User,
+) -> Optional[cl.User]:
+    # Customize user metadata for Azure Government users if needed
+    if provider_id in ["azure-gov", "azure-gov-hybrid"]:
+        default_user.metadata = {
+            **default_user.metadata,
+            "azure_gov_user": True,
+        }
+    return default_user
 
 
 @cl.set_chat_profiles
@@ -53,7 +89,7 @@ async def chat_profile():
         ),
         cl.ChatProfile(
             name="Tactical Readiness AI",
-            markdown_description="Get responses grounded on Azure Synapse Data.",
+            markdown_description="Get responses grounded on data in Azure Synapse.",
             icon="public/logo_dark.png",
             starters=base_starter
             + [
@@ -93,6 +129,9 @@ async def chat_profile():
 @cl.on_chat_start
 async def on_chat_start():
     # Setup Semantic Kernel
+    app_user = cl.user_session.get("user")
+    logger.info(f"App user: {app_user}")
+    # await cl.Message(f"Hello {app_user.identifier}").send()
 
     logger.info("Initializing app")
 

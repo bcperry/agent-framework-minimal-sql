@@ -1,0 +1,9 @@
+{
+  "environment_name": "${AZURE_ENV_NAME}",
+  "location": "${AZURE_LOCATION}",
+  "principal_id": "${AZURE_PRINCIPAL_ID}",
+  "subscription_id": "${AZURE_SUBSCRIPTION_ID}",
+  "entra_client_id": "${ENTRA_CLIENT_ID}",
+  "entra_tenant_id": "${ENTRA_TENANT_ID}",
+  "entra_client_secret": "${ENTRA_CLIENT_SECRET}"
+}
