@@ -78,7 +78,21 @@ Or open `notebook.ipynb` in VS Code.
 
 ## Azure Deployment
 
-Deploy using Azure Developer CLI:
+### Azure Government Login
+
+**Azure Developer CLI (azd):**
+```powershell
+azd config set cloud.name AzureUSGovernment
+azd auth login
+```
+
+**Azure CLI (az):**
+```powershell
+az cloud set --name AzureUSGovernment
+az login
+```
+
+### Deploy using Azure Developer CLI
 
 ```powershell
 azd up
@@ -112,6 +126,32 @@ azd provision  # Infrastructure only
 azd deploy     # Code only
 azd down       # Clean up
 ```
+
+### Alternative: Azure CLI Deployment (Existing Resources)
+
+If you already have an App Service and want to deploy without `azd` infrastructure provisioning, you can use the Azure CLI directly.
+
+**Deploy the application code:**
+
+```powershell
+az webapp up --resource-group <your-resource-group> --name <your-app-service-name> --runtime "PYTHON:3.11"
+```
+
+See [az webapp up documentation](https://learn.microsoft.com/en-us/cli/azure/webapp?view=azure-cli-latest#az-webapp-up) for more options.
+
+**Update app settings from a JSON file:**
+
+1. Export your current settings (optional):
+   ```powershell
+   az webapp config appsettings list --resource-group <your-resource-group> --name <your-app-service-name> > settings.json
+   ```
+
+2. Edit `settings.json` with your configuration, then apply:
+   ```powershell
+   az webapp config appsettings set --resource-group <your-resource-group> --name <your-app-service-name> --settings @settings.json
+   ```
+
+See [Edit app settings in bulk](https://learn.microsoft.com/en-us/azure/app-service/configure-common?tabs=cli#edit-app-settings-in-bulk) for more details on bulk configuration.
 
 ## Development
 
