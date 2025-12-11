@@ -36,21 +36,21 @@ if azure_gov_hybrid_provider.is_configured():
     oauth_module.providers.append(azure_gov_hybrid_provider)
     logger.info("Registered Azure Government Hybrid OAuth provider")
 
-
-@cl.oauth_callback
-def oauth_callback(
-    provider_id: str,
-    token: str,
-    raw_user_data: Dict[str, str],
-    default_user: cl.User,
-) -> Optional[cl.User]:
-    # Customize user metadata for Azure Government users if needed
-    if provider_id in ["azure-gov", "azure-gov-hybrid"]:
-        default_user.metadata = {
-            **default_user.metadata,
-            "azure_gov_user": True,
-        }
-    return default_user
+# TODO: re-enable for deployment
+# @cl.oauth_callback
+# def oauth_callback(
+#     provider_id: str,
+#     token: str,
+#     raw_user_data: Dict[str, str],
+#     default_user: cl.User,
+# ) -> Optional[cl.User]:
+#     # Customize user metadata for Azure Government users if needed
+#     if provider_id in ["azure-gov", "azure-gov-hybrid"]:
+#         default_user.metadata = {
+#             **default_user.metadata,
+#             "azure_gov_user": True,
+#         }
+#     return default_user
 
 
 @cl.set_chat_profiles
