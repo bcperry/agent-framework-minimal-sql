@@ -97,7 +97,7 @@ class SqlDatabase:
             schema_name: The schema to filter views by (default: 'dbo')
         """
 
-        query = "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS'"
+        query = "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS"
         results = self._execute_query(query)
         return str(results)
 
