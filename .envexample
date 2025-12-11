@@ -22,3 +22,4 @@ OAUTH_AZURE_GOV_AD_CLIENT_SECRET="your-client-secret"
 OAUTH_AZURE_GOV_AD_TENANT_ID="your-tenant-id"
 
 CHAINLIT_AUTH_SECRET="your-secret-key, can be created with chainlit create-secret"
+CHAINLIT_URL="https://{your-app}.azurewebsites.us"
