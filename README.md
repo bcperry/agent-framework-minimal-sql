@@ -66,7 +66,7 @@ CHAINLIT_AUTH_SECRET=your-auth-secret
 
 **CLI:**
 ```powershell
-uv run main.py
+uv run chainlit run main.py
 ```
 
 **Jupyter:**
