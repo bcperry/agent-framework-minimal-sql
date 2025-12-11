@@ -14,6 +14,10 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+AI_SEARCH_BOT_PROFILE = "Technical Maintenance AI"
+SQL_BOT_PROFILE = "Tactical Readiness AI"
+
+
 # Register Azure Government OAuth providers by adding them to the module
 # These will be automatically discovered by Chainlit
 azure_gov_provider = AzureGovOAuthProvider()
@@ -60,7 +64,7 @@ async def chat_profile():
     ]
     return [
         cl.ChatProfile(
-            name="Technical Maintenance AI",
+            name=AI_SEARCH_BOT_PROFILE,
             markdown_description="Get responses grounded on Maintenance data.",
             icon="public/logo_dark.png",
             starters=base_starter
@@ -88,7 +92,7 @@ async def chat_profile():
             ],
         ),
         cl.ChatProfile(
-            name="Tactical Readiness AI",
+            name=SQL_BOT_PROFILE,
             markdown_description="Get responses grounded on data in Azure Synapse.",
             icon="public/logo_dark.png",
             starters=base_starter
@@ -114,6 +118,7 @@ async def chat_profile():
             name="Combat LogiGuard AI",
             markdown_description="Get responses grounded on all available data sources.",
             icon="public/logo_dark.png",
+            default=True,
             starters=base_starter
             + [
                 cl.Starter(
@@ -186,7 +191,12 @@ async def on_chat_start():
         temperature=0.1,
     )
 
-    db_tools = [db_tool.list_tables, db_tool.list_views, db_tool.describe_table, db_tool.read_query]
+    db_tools = [
+        db_tool.list_tables,
+        db_tool.list_views,
+        db_tool.describe_table,
+        db_tool.read_query,
+    ]
     search_tools = [semantic_search, list_facets]
 
     thread = agent.get_new_thread()
@@ -206,10 +216,10 @@ async def on_message(message: cl.Message):
     profile = cl.user_session.get("chat_profile")
 
     logging.info(f"Current chat profile: {profile if profile else 'None'}")
-    if profile == "Maintenance Data Bot":
+    if profile == AI_SEARCH_BOT_PROFILE:
         tools = cl.user_session.get("ai_search")
 
-    elif profile == "Synapse Data Bot":
+    elif profile == SQL_BOT_PROFILE:
         tools = cl.user_session.get("db_tools")
 
     else:

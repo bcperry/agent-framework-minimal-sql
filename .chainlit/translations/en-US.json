@@ -12,7 +12,7 @@
             "loading": "Loading...",
             "error": {
                 "default": "An error occurred",
-                "serverConnection": "Could not reach the server"
+                "serverConnection": "Processing your request... This may take a moment for complex operations."
             }
         }
     },

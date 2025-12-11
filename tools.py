@@ -70,45 +70,45 @@ class SqlDatabase:
         NOTE: Prefer using list_views() instead of this tool. Views are the primary
         interface for querying data in this database. Only use list_tables if you
         specifically need to see underlying base tables.
-        
+
         Lists base tables in the Azure SQL (T-SQL) database.
         """
 
         query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
         results = self._execute_query(query)
         return str(results)
-    
+
     def list_views(self, schema_name: str = "dbo") -> str:
         """List all views in the SQL database for a specific schema.
 
         *** STEP 1 - START HERE ***
         This is the PRIMARY entry point for discovering available data in the Azure SQL (T-SQL) database.
         ALWAYS use this tool FIRST before describe_table or read_query to understand what views exist.
-        
+
         Views are the preferred way to access data in this database. They provide:
         - Pre-defined, optimized queries
         - Consistent data access patterns
         - Filtered and transformed data ready for analysis
-        
+
         After listing views, use describe_table to get column details for a specific view,
         then use read_query to query the view.
-        
+
         Args:
             schema_name: The schema to filter views by (default: 'dbo')
         """
 
-        query = f"SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = '{schema_name}'"
+        query = "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS'"
         results = self._execute_query(query)
         return str(results)
 
     def describe_table(
-        self, table_name: str = Field(description="Name of the table to describe")
+        self, table_name: str = Field(description="The name of the table to describe")
     ) -> str:
         """Get the schema information for a specific table.
 
         STEP 2: After using list_tables, you MUST use this to get column names, data types, max lengths,
         nullability, primary keys, and foreign keys for a specific table in the Azure SQL (T-SQL) database.
-        This information is essential before executing read_query or write_query.
+        This information is essential before executing read_query or write_query. This does not require the database schema name.
         """
         if table_name is None:
             raise ValueError("Missing table_name argument")
@@ -166,8 +166,8 @@ class SqlDatabase:
 
         REQUIRED WORKFLOW:
         STEP 3a: First, query distinct values for any columns you plan to filter on.
-                 Example: SELECT DISTINCT status FROM orders
-                 Example: SELECT DISTINCT category FROM products
+                 Example: SELECT DISTINCT status FROM schema.orders
+                 Example: SELECT DISTINCT category FROM alternative_schema.products
                  This shows you what values actually exist in the database.
 
         STEP 3b: After verifying actual values exist, construct your filtered query.
