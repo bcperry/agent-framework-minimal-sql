@@ -186,7 +186,7 @@ async def on_chat_start():
         temperature=0.1,
     )
 
-    db_tools = [db_tool.list_tables, db_tool.describe_table, db_tool.read_query]
+    db_tools = [db_tool.list_tables, db_tool.list_views, db_tool.describe_table, db_tool.read_query]
     search_tools = [semantic_search, list_facets]
 
     thread = agent.get_new_thread()

@@ -65,13 +65,39 @@ class SqlDatabase:
             raise
 
     def list_tables(self) -> str:
-        """List all tables in the SQL database.
+        """List all base tables in the SQL database.
 
-        STEP 1: Start here to discover available tables in the Azure SQL (T-SQL) database.
-        Use this before describe_table or read_query to understand what tables exist.
+        NOTE: Prefer using list_views() instead of this tool. Views are the primary
+        interface for querying data in this database. Only use list_tables if you
+        specifically need to see underlying base tables.
+        
+        Lists base tables in the Azure SQL (T-SQL) database.
         """
 
         query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
+        results = self._execute_query(query)
+        return str(results)
+    
+    def list_views(self, schema_name: str = "dbo") -> str:
+        """List all views in the SQL database for a specific schema.
+
+        *** STEP 1 - START HERE ***
+        This is the PRIMARY entry point for discovering available data in the Azure SQL (T-SQL) database.
+        ALWAYS use this tool FIRST before describe_table or read_query to understand what views exist.
+        
+        Views are the preferred way to access data in this database. They provide:
+        - Pre-defined, optimized queries
+        - Consistent data access patterns
+        - Filtered and transformed data ready for analysis
+        
+        After listing views, use describe_table to get column details for a specific view,
+        then use read_query to query the view.
+        
+        Args:
+            schema_name: The schema to filter views by (default: 'dbo')
+        """
+
+        query = f"SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = '{schema_name}'"
         results = self._execute_query(query)
         return str(results)
 

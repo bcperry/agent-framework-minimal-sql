@@ -43,6 +43,7 @@ resource "azurerm_linux_web_app" "app_service" {
     SCM_DO_BUILD_DURING_DEPLOYMENT = "true"
     CHAINLIT_HOST                  = "0.0.0.0"
     CHAINLIT_PORT                  = "8000"
+    CHAINLIT_URL                   = "https://${var.name}.azurewebsites.us"
     AZURE_CLIENT_ID                = var.managed_identity_client_id
     WEBSITES_PORT                  = "8000"
     
