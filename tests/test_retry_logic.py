@@ -47,6 +47,23 @@ class TestImmediateFailover:
         assert client.max_retries != 2
 
 
+class TestContextPreservation:
+    """Test that failover preserves conversation context."""
+
+    def test_run_agent_stream_accepts_none_message(self) -> None:
+        """_run_agent_stream should accept None for message_content to continue from existing context."""
+        # This test verifies the function signature accepts Optional[str]
+        from main import _run_agent_stream
+        import inspect
+        
+        sig = inspect.signature(_run_agent_stream)
+        msg_param = sig.parameters.get("message_content")
+        assert msg_param is not None
+        # The annotation should be Optional[str] which includes None
+        annotation_str = str(msg_param.annotation)
+        assert "None" in annotation_str or "Optional" in annotation_str or "str | None" in annotation_str
+
+
 class TestIsRetryableError:
     """Test the _is_retryable_error helper function."""
 

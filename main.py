@@ -295,12 +295,20 @@ def _is_retryable_error(e: Exception) -> bool:
 
 async def _run_agent_stream(
     agent: ChatAgent,
-    message_content: str,
+    message_content: Optional[str],
     tools: list,
     thread: AgentThread,
     parent_message_id: str,
 ) -> Optional[cl.Message]:
-    """Run agent stream and handle response rendering. Returns the answer message or None."""
+    """Run agent stream and handle response rendering. Returns the answer message or None.
+    
+    Args:
+        agent: The ChatAgent to run
+        message_content: The message to send, or None to continue from existing thread context
+        tools: The tools available to the agent
+        thread: The conversation thread (may contain prior context from failed primary agent)
+        parent_message_id: The parent message ID for UI steps
+    """
     answer: Optional[cl.Message] = None
     active_steps: dict = {}
     current_call_id: Optional[str] = None
@@ -390,13 +398,14 @@ async def on_message(message: cl.Message):
             ).send()
 
             try:
-                # Create new thread for secondary agent to avoid state issues
-                secondary_thread = secondary_agent.get_new_thread()
+                # Reuse the existing thread to preserve any tool calls and results
+                # from the primary agent's partial execution. Pass None for message
+                # since it's already in the thread context.
                 answer = await _run_agent_stream(
-                    secondary_agent, message.content, tools, secondary_thread, message.id
+                    secondary_agent, None, tools, thread, message.id
                 )
                 used_fallback = True
-                logger.info("Successfully processed request using secondary model")
+                logger.info("Successfully processed request using secondary model with preserved context")
             except Exception as secondary_e:
                 logger.error(
                     f"Secondary LLM also failed: {secondary_e}", exc_info=True
