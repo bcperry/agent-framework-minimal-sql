@@ -139,10 +139,19 @@ async def on_chat_start():
 
     logger.info("Initializing app")
 
+    # Primary LLM configuration
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     deployment_name = os.getenv("AZURE_OPENAI_MODEL", "")
     api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
     api_version = os.getenv("AZURE_OPENAI_API_VERSION")
+
+    # Secondary/Fallback LLM configuration
+    secondary_endpoint = os.getenv("AZURE_OPENAI_SECONDARY_ENDPOINT", "")
+    secondary_deployment_name = os.getenv("AZURE_OPENAI_SECONDARY_MODEL", "")
+    secondary_api_key = os.getenv("AZURE_OPENAI_SECONDARY_API_KEY", "")
+    secondary_api_version = os.getenv(
+        "AZURE_OPENAI_SECONDARY_API_VERSION", api_version
+    )
 
     logger.info(
         "Initializing Azure OpenAI chat client (deployment=%s)", deployment_name
@@ -163,6 +172,19 @@ async def on_chat_start():
             ", ".join(missing),
         )
 
+    # Check for secondary LLM configuration
+    has_secondary_llm = all([
+        secondary_endpoint,
+        secondary_deployment_name,
+        secondary_api_key,
+    ])
+    if has_secondary_llm:
+        logger.info(
+            "Secondary LLM configured (deployment=%s)", secondary_deployment_name
+        )
+    else:
+        logger.info("No secondary LLM configured - fallback will not be available")
+
     # Get connection string from environment
     connection_string = os.environ.get("AZURE_SQL_CONNECTIONSTRING")
     print(f"Connected using: {connection_string}")
@@ -171,7 +193,7 @@ async def on_chat_start():
 
     db_tool = SqlDatabase(connection_string)
 
-    # Configure OpenAI client with retries but shorter timeout to prevent long hangs
+    # Configure primary OpenAI client with retries but shorter timeout
     llm = AzureOpenAIChatClient(
         endpoint=endpoint or None,
         deployment_name=deployment_name or None,
@@ -180,6 +202,18 @@ async def on_chat_start():
         max_retries=3,   # Allow retries for transient errors
         timeout=120.0,   # Total timeout for request including retries
     )
+
+    # Configure secondary/fallback OpenAI client if available
+    secondary_llm: Optional[AzureOpenAIChatClient] = None
+    if has_secondary_llm:
+        secondary_llm = AzureOpenAIChatClient(
+            endpoint=secondary_endpoint or None,
+            deployment_name=secondary_deployment_name or None,
+            api_key=secondary_api_key or None,
+            api_version=secondary_api_version or None,
+            max_retries=3,
+            timeout=120.0,
+        )
 
     agent = ChatAgent(
         chat_client=llm,
@@ -193,6 +227,21 @@ async def on_chat_start():
         temperature=0.1,
     )
 
+    # Create secondary agent if fallback LLM is configured
+    secondary_agent: Optional[ChatAgent] = None
+    if secondary_llm:
+        secondary_agent = ChatAgent(
+            chat_client=secondary_llm,
+            name="agent_name_secondary",
+            instructions="You are a helpful assistant with database tools. Follow these rules strictly:\n\
+1. ALWAYS use your tools to answer questions - never rely on assumptions or general knowledge\n\
+2. NEVER make up information - if you don't have data from a tool, say so\n\
+3. Follow ALL step-by-step instructions in tool docstrings exactly - including STEP 3a before STEP 3b\n\
+4. If a tool says REQUIRED or DO NOT skip, you MUST comply with that instruction\n\
+5. Provide clear, concise responses based only on verified tool results",
+            temperature=0.1,
+        )
+
     db_tools = [
         db_tool.list_tables,
         db_tool.list_views,
@@ -204,6 +253,7 @@ async def on_chat_start():
     thread = agent.get_new_thread()
 
     cl.user_session.set("agent", agent)
+    cl.user_session.set("secondary_agent", secondary_agent)
     cl.user_session.set("db_tools", db_tools)
     cl.user_session.set("ai_search", search_tools)
     cl.user_session.set("thread", thread)

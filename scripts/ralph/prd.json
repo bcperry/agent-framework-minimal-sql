@@ -1,0 +1,33 @@
+{
+  "branchName": "ralph/feature",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add user authentication endpoint",
+      "acceptanceCriteria": [
+        "add additional llm model as a fallback option",
+        "specify primary and secondary llm models in configuration",
+        "add additional llm information to the .env.example file",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+        {
+      "id": "US-002",
+      "title": "Add user authentication endpoint",
+      "acceptanceCriteria": [
+        "gracefully handle 429 reponses from the llm calls",
+        "retry llm calls on a secondary model if the primary model fails for any reason",
+        "indicates to user that the system is retrying the request with a different model",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
