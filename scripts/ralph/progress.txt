@@ -11,7 +11,7 @@ Started: 2024-01-15
 - Type hints: Always annotate function signatures
 - LLM Config: AzureOpenAIChatClient supports endpoint, deployment_name, api_key, api_version, max_retries, timeout
 - Session Storage: Use `cl.user_session.set()` and `cl.user_session.get()` for Chainlit session data
-- Error Handling: Check for 429, rate_limit, capacity keywords to detect retryable LLM errors
+- Error Handling: Check for 429, rate_limit, "rate limit" (with space), capacity keywords to detect retryable LLM errors
 - Agent Thread: Import `AgentThread` from `agent_framework` for type hints
 
 ## Key Files
@@ -37,11 +37,15 @@ Started: 2024-01-15
 ## 2026-01-07 - US-002
 - What was implemented: Added 429 retry logic with fallback to secondary model
 - Files changed:
-  - `main.py` - Added _is_retryable_error() helper, refactored on_message with retry logic
+  - `main.py` - Added _is_retryable_error() helper, refactored on_message with retry logic, enhanced error detection for "rate limit" (with space)
+  - `tests/test_retry_logic.py` - Created unit tests for _is_retryable_error() (14 tests)
+  - `tests/__init__.py` - Created tests package
 - **Learnings:**
   - Helper functions can be defined at module level (not inside async functions)
   - Use `agent.get_new_thread()` for secondary agent to avoid state issues
-  - Multiple error conditions to check: "429", "Too Many Requests", "RateLimitError", "rate_limit", "capacity"
+  - Multiple error conditions to check: "429", "Too Many Requests", "RateLimitError", "rate_limit", "rate limit", "capacity"
   - User notifications: "⏳ Primary model unavailable..." for retry, append "_Response generated using backup model._" for fallback responses
   - Graceful degradation: handle both primary-only failure and both-fail scenarios separately
+  - For sync tests, avoid pytest.mark.asyncio - use sync test methods with assertions
+  - OpenAI returns "Rate limit" with space, not just "rate_limit" with underscore
 ---
