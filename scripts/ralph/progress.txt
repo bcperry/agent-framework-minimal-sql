@@ -9,10 +9,25 @@ Started: 2024-01-15
 - Async: Use `async def` with `await` for I/O operations
 - Testing: Use pytest fixtures, mock external services with `unittest.mock`
 - Type hints: Always annotate function signatures
+- LLM Config: AzureOpenAIChatClient supports endpoint, deployment_name, api_key, api_version, max_retries, timeout
+- Session Storage: Use `cl.user_session.set()` and `cl.user_session.get()` for Chainlit session data
 
 ## Key Files
-- src/models.py
-- src/api/routes.py
-- src/config.py
-- tests/conftest.py
+- main.py - Main Chainlit app with LLM and agent configuration
+- .envexample - Environment variable template
+- tools.py - SQL database tools
+- rag_tools.py - Semantic search tools
+---
+
+## 2026-01-07 - US-001
+- What was implemented: Added secondary/fallback LLM model configuration
+- Files changed:
+  - `.envexample` - Added AZURE_OPENAI_SECONDARY_* environment variables
+  - `main.py` - Added secondary LLM client initialization and secondary agent creation
+  - `pyproject.toml` - Added pytest and mypy dev dependencies
+- **Learnings:**
+  - Pre-existing mypy errors exist in rag_tools.py and main.py (decorator type mismatches)
+  - No tests existed in the repo initially
+  - ChatAgent is created per LLM client, with same instructions for consistency
+  - Secondary agent stored in session as "secondary_agent" for fallback use
 ---
