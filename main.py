@@ -36,21 +36,20 @@ if azure_gov_hybrid_provider.is_configured():
     oauth_module.providers.append(azure_gov_hybrid_provider)
     logger.info("Registered Azure Government Hybrid OAuth provider")
 
-# TODO: re-enable for deployment
-# @cl.oauth_callback
-# def oauth_callback(
-#     provider_id: str,
-#     token: str,
-#     raw_user_data: Dict[str, str],
-#     default_user: cl.User,
-# ) -> Optional[cl.User]:
-#     # Customize user metadata for Azure Government users if needed
-#     if provider_id in ["azure-gov", "azure-gov-hybrid"]:
-#         default_user.metadata = {
-#             **default_user.metadata,
-#             "azure_gov_user": True,
-#         }
-#     return default_user
+@cl.oauth_callback
+def oauth_callback(
+    provider_id: str,
+    token: str,
+    raw_user_data: Dict[str, str],
+    default_user: cl.User,
+) -> Optional[cl.User]:
+    # Customize user metadata for Azure Government users if needed
+    if provider_id in ["azure-gov", "azure-gov-hybrid"]:
+        default_user.metadata = {
+            **default_user.metadata,
+            "azure_gov_user": True,
+        }
+    return default_user
 
 
 @cl.set_chat_profiles
@@ -172,11 +171,14 @@ async def on_chat_start():
 
     db_tool = SqlDatabase(connection_string)
 
+    # Configure OpenAI client with retries but shorter timeout to prevent long hangs
     llm = AzureOpenAIChatClient(
         endpoint=endpoint or None,
         deployment_name=deployment_name or None,
         api_key=api_key or None,
         api_version=api_version or None,
+        max_retries=3,   # Allow retries for transient errors
+        timeout=120.0,   # Total timeout for request including retries
     )
 
     agent = ChatAgent(
@@ -233,52 +235,69 @@ async def on_message(message: cl.Message):
     active_steps = {}
     current_call_id = None
 
-    async for msg in agent.run_stream(message.content, tools=tools, thread=thread):
-        # logging.info(f"Agent message: {msg.to_json()}")
+    try:
+        async for msg in agent.run_stream(message.content, tools=tools, thread=thread):
+            # logging.info(f"Agent message: {msg.to_json()}")
 
-        msg_dict = msg.to_dict()
-        if msg_dict.get("type") == "agent_run_response_update":
-            for content in msg_dict.get("contents", []):
-                content_type = content.get("type")
+            msg_dict = msg.to_dict()
+            if msg_dict.get("type") == "agent_run_response_update":
+                for content in msg_dict.get("contents", []):
+                    content_type = content.get("type")
 
-                if content_type == "function_call":
-                    # If we were streaming an answer, finalize it and reset
-                    if answer:
-                        await answer.update()
-                        answer = None
+                    if content_type == "function_call":
+                        # If we were streaming an answer, finalize it and reset
+                        if answer:
+                            await answer.update()
+                            answer = None
 
-                    call_id = content.get("call_id")
-                    name = content.get("name")
-                    arguments = content.get("arguments", "")
+                        call_id = content.get("call_id")
+                        name = content.get("name")
+                        arguments = content.get("arguments", "")
 
-                    if name:
-                        step = cl.Step(name=name, type="tool", parent_id=message.id)
-                        step.input = arguments
-                        if call_id:
-                            active_steps[call_id] = step
-                            current_call_id = call_id
-                        await step.send()
-                    else:
-                        target_id = call_id if call_id else current_call_id
-                        if target_id and target_id in active_steps:
-                            active_steps[target_id].input += arguments
-                            await active_steps[target_id].update()
+                        if name:
+                            step = cl.Step(name=name, type="tool", parent_id=message.id)
+                            step.input = arguments
+                            if call_id:
+                                active_steps[call_id] = step
+                                current_call_id = call_id
+                            await step.send()
+                        else:
+                            target_id = call_id if call_id else current_call_id
+                            if target_id and target_id in active_steps:
+                                active_steps[target_id].input += arguments
+                                await active_steps[target_id].update()
 
-                elif content_type == "function_result":
-                    call_id = content.get("call_id")
-                    result = content.get("result")
-                    if call_id in active_steps:
-                        active_steps[call_id].output = result
-                        await active_steps[call_id].update()
-                        del active_steps[call_id]
+                    elif content_type == "function_result":
+                        call_id = content.get("call_id")
+                        result = content.get("result")
+                        if call_id in active_steps:
+                            active_steps[call_id].output = result
+                            await active_steps[call_id].update()
+                            del active_steps[call_id]
 
-        if getattr(msg, "text", None):
-            if answer is None:
-                answer = cl.Message(content="")
-            await answer.stream_token(msg.text)
+            if getattr(msg, "text", None):
+                if answer is None:
+                    answer = cl.Message(content="")
+                await answer.stream_token(msg.text)
 
-    # Send the final message if not already sent
-    if answer:
-        await answer.send()
+        # Send the final message if not already sent
+        if answer:
+            await answer.send()
+
+    except Exception as e:
+        # Check if it's a 429 rate limit error
+        error_message = str(e)
+        if "429" in error_message or "Too Many Requests" in error_message or "RateLimitError" in str(type(e)):
+            logger.error(f"Rate limit error (429): {e}")
+            await cl.Message(
+                content="⚠️ The AI service is currently experiencing high demand (rate limit exceeded). Please try again in a moment.",
+                type="error"
+            ).send()
+        else:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            await cl.Message(
+                content=f"❌ An error occurred while processing your request: {error_message}",
+                type="error"
+            ).send()
 
     cl.user_session.set("thread", thread)
