@@ -15,5 +15,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "ipykernel>=7.1.0",
+    "mypy>=1.19.1",
     "pre-commit>=4.4.0",
+    "pytest>=9.0.2",
 ]

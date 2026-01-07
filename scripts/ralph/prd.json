@@ -1,0 +1,121 @@
+{
+  "branchName": "ralph/feature",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add fallback llm",
+      "acceptanceCriteria": [
+        "add additional llm model as a fallback option",
+        "specify primary and secondary llm models in configuration",
+        "add additional llm information to the .env.example file",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+        {
+      "id": "US-002",
+      "title": "Add fallback llm retry logic",
+      "acceptanceCriteria": [
+        "gracefully handle 429 reponses from the llm calls",
+        "retry llm calls on a secondary model if the primary model fails for any reason",
+        "indicates to user that the system is retrying the request with a different model",
+        "model should retry immediately on failure without waiting for the primary model backoff delay",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+            {
+      "id": "US-003",
+      "title": "improve retry logic for llm calls",
+      "acceptanceCriteria": [
+        "current implementation only sends the backup model after 3 retries and backoff delays",
+        "the llm should retry immediately on failure using the secondary model it should not wait 60 seconds to retry the primary model",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "here is the current error 2026-01-07 13:17:51 - HTTP Request: POST https://azd-mcp-client-openai-awevs6sfsjhxq.openai.azure.us/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview HTTP/1.1 429 Too Many Requests
+                2026-01-07 13:17:51 - Retrying request to /chat/completions in 60.000000 seconds
+                2026-01-07 13:18:52 - HTTP Request: POST https://azd-mcp-client-openai-awevs6sfsjhxq.openai.azure.us/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview HTTP/1.1 429 Too Many Requests
+                2026-01-07 13:18:52 - Retrying request to /chat/completions in 60.000000 seconds
+                2026-01-07 13:19:52 - HTTP Request: POST https://azd-mcp-client-openai-awevs6sfsjhxq.openai.azure.us/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview HTTP/1.1 429 Too Many Requests
+                2026-01-07 13:19:52 - Primary LLM failed with retryable error: <class 'agent_framework.azure._chat_client.AzureOpenAIChatClient'> service failed to complete the prompt: Error code: 429 - {'error': {'code': 'RateLimitReached', 'message': 'Your requests to gpt-4o for gpt-4o in USGov Arizona have exceeded the token rate limit for your current OpenAI S0 pricing tier. This request was for ChatCompletions_Create under Azure OpenAI API version 2025-01-01-preview. Please retry after 60 seconds. To increase your default rate limit, visit: https://aka.ms/AOAIGovQuota.'}}. Retrying with secondary model...
+                2026-01-07 13:19:54 - Retrying request to /chat/completions in 0.412074 seconds
+                2026-01-07 13:19:55 - Retrying request to /chat/completions in 0.958141 seconds"
+    },
+            {
+      "id": "US-003",
+      "title": "correct backup llm call",
+      "acceptanceCriteria": [
+        "current implementation fails to properly call the secondary llm",
+        "the llm should retry immediately on failure using the secondary model it should not wait 60 seconds to retry the primary model",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "here is the current error: Secondary LLM also failed: <class 'agent_framework.azure._chat_client.AzureOpenAIChatClient'> service failed to complete the prompt: Connection error."
+    },
+            {
+      "id": "US-004",
+      "title": "correct backup llm call",
+      "acceptanceCriteria": [
+        "current implementation still attempts to retry the primary llm 3 times before failing over to the secondary llm",
+        "the llm should retry IMMEDIATELY on failure using the secondary model it should not wait 60 seconds to retry the primary model",
+        "Create and use tests to verify the immediate failover behavior",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "here is the current error: Secondary LLM also failed: <class 'agent_framework.azure._chat_client.AzureOpenAIChatClient'> service failed to complete the prompt: Connection error."
+    },
+ {
+      "id": "US-005",
+      "title": "minimize token usage on failover",
+      "acceptanceCriteria": [
+        "current implementation restarts the entire prompt when failing over to the secondary llm",
+        "the llm should utilize the full context, including the tool calls and results from the primary llm when failing over to the secondary llm",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+ {
+      "id": "US-006",
+      "title": "new chat bug",
+      "acceptanceCriteria": [
+        "when the user starts a new chat, the llm should start a new chat thread/session",
+        "single chat thread/session behavior should be unchanged.",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Fixed by explicitly clearing thread/agent state in on_chat_start and adding on_chat_end cleanup handler"
+    },
+ {
+      "id": "US-007",
+      "title": "number of tokens used",
+      "acceptanceCriteria": [
+        "as a part of the chat response, log the number of tokens used in query, tool use, and response",
+        "This should reset on each chat",
+        "this should not be shown to the user",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented token usage tracking using UsageDetails from agent_framework. Logs per-request and cumulative session tokens."
+    },
+  ]
+}

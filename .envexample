@@ -1,8 +1,14 @@
-
+# Primary LLM Configuration
 AZURE_OPENAI_ENDPOINT = "https://{your-custom-endpoint}.openai.azure.com/" # or your Azure Government endpoint
 AZURE_OPENAI_MODEL = "your-deployment-name"
 AZURE_OPENAI_API_KEY = "your-api-key"
 AZURE_OPENAI_API_VERSION = "2024-02-15-preview"
+
+# Secondary/Fallback LLM Configuration (used when primary fails, e.g., 429 rate limit errors)
+AZURE_OPENAI_SECONDARY_ENDPOINT = "https://{your-secondary-endpoint}.openai.azure.com/"
+AZURE_OPENAI_SECONDARY_MODEL = "your-secondary-deployment-name"
+AZURE_OPENAI_SECONDARY_API_KEY = "your-secondary-api-key"
+AZURE_OPENAI_SECONDARY_API_VERSION = "2024-02-15-preview"
 
 # For deployment as an app service, use Managed Identity authentication
 AZURE_SQL_CONNECTIONSTRING="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<yourserver>.database.usgovcloudapi.net,1433;Database=<yourdatabase>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;Authentication=ActiveDirectoryMsi"

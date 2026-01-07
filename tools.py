@@ -1,9 +1,13 @@
 import logging
+import struct
+import sys
 
 from pydantic import Field
 import pyodbc
 from contextlib import closing
 from typing import Any
+
+from azure.identity import DefaultAzureCredential, AzureCliCredential
 
 
 # # Load environment variables from .env file (for local development)
@@ -19,14 +23,47 @@ from typing import Any
 logger = logging.getLogger("tools")
 
 
+def _get_token_struct(token: str) -> bytes:
+    """Convert access token to the format required by pyodbc for SQL Server."""
+    token_bytes = token.encode("utf-16-le")
+    return struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
+
+
 class SqlDatabase:
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
+        self._credential = None
+        self._init_credential()
         self.get_conn()
+
+    def _init_credential(self):
+        """Initialize Azure credential for token-based auth if needed."""
+        # Check if connection string uses Azure AD auth that needs token injection
+        conn_lower = self.connection_string.lower()
+        if "authentication=activedirectory" in conn_lower:
+            # Remove the Authentication attribute - we'll use token instead
+            import re
+            self.connection_string = re.sub(
+                r";?\s*Authentication=[^;]+", "", self.connection_string, flags=re.IGNORECASE
+            )
+            # Also remove Uid if present (not needed for token auth)
+            self.connection_string = re.sub(
+                r";?\s*Uid=[^;]+", "", self.connection_string, flags=re.IGNORECASE
+            )
+            # Use AzureCliCredential for WSL (uses az login token)
+            self._credential = AzureCliCredential()
+            logger.info("Using Azure CLI credential for SQL authentication")
 
     def get_conn(self):
         try:
-            conn = pyodbc.connect(self.connection_string)
+            if self._credential:
+                # Get token for Azure SQL / Synapse
+                # Use the correct scope for Azure Government
+                token = self._credential.get_token("https://database.usgovcloudapi.net/.default")
+                token_struct = _get_token_struct(token.token)
+                conn = pyodbc.connect(self.connection_string, attrs_before={1256: token_struct})
+            else:
+                conn = pyodbc.connect(self.connection_string)
             return conn
         except Exception as e:
             logger.error(f"Database connection error: {e}")
