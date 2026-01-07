@@ -263,12 +263,14 @@ def _is_retryable_error(e: Exception) -> bool:
     """Check if an error is retryable (429 rate limit or similar transient errors)."""
     error_message = str(e)
     error_type = str(type(e))
+    error_lower = error_message.lower()
     return (
         "429" in error_message
         or "Too Many Requests" in error_message
         or "RateLimitError" in error_type
-        or "rate_limit" in error_message.lower()
-        or "capacity" in error_message.lower()
+        or "rate_limit" in error_lower
+        or "rate limit" in error_lower
+        or "capacity" in error_lower
     )
 
 
