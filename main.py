@@ -193,14 +193,16 @@ async def on_chat_start():
 
     db_tool = SqlDatabase(connection_string)
 
-    # Configure primary OpenAI client with retries but shorter timeout
+    # Configure primary OpenAI client with NO retries for immediate fallback
+    # Setting max_retries=0 ensures 429 errors raise immediately,
+    # allowing our retry logic to switch to secondary model without waiting
     llm = AzureOpenAIChatClient(
         endpoint=endpoint or None,
         deployment_name=deployment_name or None,
         api_key=api_key or None,
         api_version=api_version or None,
-        max_retries=3,   # Allow retries for transient errors
-        timeout=120.0,   # Total timeout for request including retries
+        max_retries=0,   # No retries - fail immediately to trigger fallback
+        timeout=120.0,   # Total timeout for request
     )
 
     # Configure secondary/fallback OpenAI client if available
