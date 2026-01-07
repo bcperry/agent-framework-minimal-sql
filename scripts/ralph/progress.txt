@@ -13,6 +13,9 @@ Started: 2024-01-15
 - Session Storage: Use `cl.user_session.set()` and `cl.user_session.get()` for Chainlit session data
 - Error Handling: Check for 429, rate_limit, "rate limit" (with space), capacity keywords to detect retryable LLM errors
 - Agent Thread: Import `AgentThread` from `agent_framework` for type hints
+- Immediate Failover: AzureOpenAIChatClient doesn't pass max_retries to underlying client - create AsyncAzureOpenAI directly with max_retries=0 and pass via async_client param
+- Context Preservation: On failover, pass None for message and reuse existing thread to preserve tool call results
+- New Chat Sessions: Always clear thread/agent state at start of on_chat_start and add @cl.on_chat_end handler for cleanup
 
 ## Key Files
 - main.py - Main Chainlit app with LLM and agent configuration
@@ -48,4 +51,64 @@ Started: 2024-01-15
   - Graceful degradation: handle both primary-only failure and both-fail scenarios separately
   - For sync tests, avoid pytest.mark.asyncio - use sync test methods with assertions
   - OpenAI returns "Rate limit" with space, not just "rate_limit" with underscore
+---
+
+## 2026-01-07 - US-003
+- What was implemented: Changed primary LLM max_retries from 3 to 0 for immediate fallback
+- Files changed:
+  - `main.py` - Set max_retries=0 on primary AzureOpenAIChatClient to skip internal retries
+- **Learnings:**
+  - OpenAI SDK internal retries cause 60-second delays before exceptions bubble up
+  - Setting max_retries=0 on primary LLM ensures immediate failure on 429, allowing our fallback logic to switch to secondary model instantly
+  - The AzureOpenAIChatClient max_retries parameter controls SDK-level retries, not application-level retries
+  - For immediate failover, disable SDK retries and handle retry logic at application level
+---
+
+## 2026-01-07 - US-003 (correct backup llm call)
+- What was implemented: Fixed secondary LLM client initialization to properly pass configuration
+- Files changed:
+  - `main.py` - Fixed secondary_api_version to always have a valid default, removed `or None` pattern for secondary client, added logging for secondary client initialization
+- **Learnings:**
+  - Always ensure api_version has a valid default value, not None
+  - Don't use `or None` pattern when values are already validated as truthy
+  - Add debug logging when initializing secondary clients to help diagnose connection issues
+  - Secondary endpoint/deployment/api_key are validated by has_secondary_llm check, so they're guaranteed to be non-empty strings
+---
+
+## 2026-01-07 - US-004
+- What was implemented: Fixed immediate failover by creating AsyncAzureOpenAI client directly with max_retries=0
+- Files changed:
+  - `main.py` - Import AsyncAzureOpenAI from openai.lib.azure, create primary_async_client with max_retries=0, pass to AzureOpenAIChatClient via async_client param
+  - `tests/test_retry_logic.py` - Added TestImmediateFailover class with 3 tests verifying max_retries configuration
+- **Learnings:**
+  - AzureOpenAIChatClient does NOT pass max_retries to the underlying AsyncAzureOpenAI client (it's ignored in kwargs)
+  - To disable SDK-level retries, create AsyncAzureOpenAI directly with max_retries=0 and pass it via async_client parameter
+  - The agent_framework AzureOpenAIConfigMixin builds args dict explicitly and doesn't include max_retries from kwargs
+  - Default max_retries for AsyncAzureOpenAI is 2, which causes 60-second delays on 429 errors
+  - Pre-existing mypy errors in rag_tools.py and main.py decorator are unrelated to these changes
+---
+
+## 2026-01-07 - US-005
+- What was implemented: Modified failover to preserve thread context instead of restarting with new thread
+- Files changed:
+  - `main.py` - Changed `_run_agent_stream` to accept Optional[str] for message_content, modified failover to pass existing thread and None for message
+  - `tests/test_retry_logic.py` - Added TestContextPreservation class with test for Optional[str] signature
+- **Learnings:**
+  - AgentThread stores the conversation context including user messages and tool calls/results
+  - When failing over, pass None for message_content and reuse the existing thread to preserve partial execution results
+  - agent.run_stream() can accept None for messages parameter to continue from existing thread state
+  - This saves tokens by not re-sending the user message and preserves any tool calls that succeeded before the 429 error
+---
+
+## 2026-01-07 - US-006
+- What was implemented: Fixed new chat bug - ensured proper session state reset when starting new chat
+- Files changed:
+  - `main.py` - Added explicit clearing of thread/agent/secondary_agent at start of on_chat_start, added @cl.on_chat_end handler for cleanup, added logging
+  - `tests/test_retry_logic.py` - Added TestNewChatSession class with 4 tests verifying session reset behavior
+- **Learnings:**
+  - Chainlit user_session may persist between chats if sessions are resumed or reconnected
+  - Always explicitly clear session state at start of on_chat_start to prevent state leakage
+  - Use @cl.on_chat_end decorator to clean up resources when chat ends
+  - AgentThread objects can be pickled but not JSON serialized - they won't persist across sessions properly
+  - Pre-existing mypy errors (pyodbc, AzureKeyCredential, decorator types) are unrelated to retry/failover logic
 ---

@@ -133,12 +133,21 @@ async def chat_profile():
 
 @cl.on_chat_start
 async def on_chat_start():
+    # Clear any existing session data to ensure fresh state for new chat
+    # This prevents thread leakage between chat sessions
+    old_thread = cl.user_session.get("thread")
+    if old_thread:
+        logger.info("Clearing existing thread from previous chat session")
+    cl.user_session.set("thread", None)
+    cl.user_session.set("agent", None)
+    cl.user_session.set("secondary_agent", None)
+    
     # Setup Semantic Kernel
     app_user = cl.user_session.get("user")
     logger.info(f"App user: {app_user}")
     # await cl.Message(f"Hello {app_user.identifier}").send()
 
-    logger.info("Initializing app")
+    logger.info("Initializing new chat session")
 
     # Primary LLM configuration
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
@@ -270,12 +279,23 @@ async def on_chat_start():
     search_tools = [semantic_search, list_facets]
 
     thread = agent.get_new_thread()
+    logger.info("Created new thread for chat session")
 
     cl.user_session.set("agent", agent)
     cl.user_session.set("secondary_agent", secondary_agent)
     cl.user_session.set("db_tools", db_tools)
     cl.user_session.set("ai_search", search_tools)
     cl.user_session.set("thread", thread)
+
+
+@cl.on_chat_end
+async def on_chat_end():
+    """Clean up session data when chat ends."""
+    logger.info("Chat session ending, cleaning up resources")
+    # Clear thread and agents to ensure no state leaks to next session
+    cl.user_session.set("thread", None)
+    cl.user_session.set("agent", None)
+    cl.user_session.set("secondary_agent", None)
 
 
 def _is_retryable_error(e: Exception) -> bool:

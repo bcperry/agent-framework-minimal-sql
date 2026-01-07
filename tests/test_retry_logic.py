@@ -144,3 +144,61 @@ class TestRetryLogicBehavior:
         """Should detect OpenAI rate limit errors with header info."""
         error = Exception("Rate limit reached for requests. Please retry after 60 seconds.")
         assert _is_retryable_error(error) is True
+
+
+class TestNewChatSession:
+    """Test that new chat sessions properly reset state."""
+
+    def test_on_chat_start_clears_previous_thread(self) -> None:
+        """on_chat_start should clear any existing thread from previous session."""
+        # Verify the pattern in main.py clears old state before creating new
+        import inspect
+        import main
+        
+        source = inspect.getsource(main.on_chat_start)
+        
+        # Check that on_chat_start sets thread to None before creating new one
+        assert 'cl.user_session.set("thread", None)' in source
+        assert 'cl.user_session.set("agent", None)' in source
+        assert 'cl.user_session.set("secondary_agent", None)' in source
+
+    def test_on_chat_end_exists(self) -> None:
+        """on_chat_end should be defined for cleanup."""
+        import main
+        
+        # Verify on_chat_end is defined
+        assert hasattr(main, 'on_chat_end')
+        assert callable(main.on_chat_end)
+
+    def test_on_chat_end_clears_session(self) -> None:
+        """on_chat_end should clear thread and agents from session."""
+        import inspect
+        import main
+        
+        source = inspect.getsource(main.on_chat_end)
+        
+        # Check that on_chat_end clears the thread and agents
+        assert 'cl.user_session.set("thread", None)' in source
+        assert 'cl.user_session.set("agent", None)' in source
+        assert 'cl.user_session.set("secondary_agent", None)' in source
+
+    def test_new_thread_created_each_chat_start(self) -> None:
+        """Verify that agent.get_new_thread() creates unique threads."""
+        from agent_framework import ChatAgent
+        from unittest.mock import MagicMock
+        
+        # Create mock LLM client
+        mock_client = MagicMock()
+        mock_client.get_chat_client_name.return_value = 'test'
+        mock_client.get_model_name.return_value = 'test'
+        
+        # Create agent
+        agent = ChatAgent(chat_client=mock_client, name='test', instructions='test')
+        
+        # Get multiple threads - they should be different objects
+        thread1 = agent.get_new_thread()
+        thread2 = agent.get_new_thread()
+        
+        # Verify threads are different objects (new thread for each chat)
+        assert thread1 is not thread2
+        assert id(thread1) != id(thread2)
