@@ -3,6 +3,7 @@ import chainlit as cl
 import logging
 from typing import Dict, Optional
 from dotenv import load_dotenv
+from openai.lib.azure import AsyncAzureOpenAI
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatAgent, AgentThread
 from tools import SqlDatabase
@@ -197,15 +198,23 @@ async def on_chat_start():
     db_tool = SqlDatabase(connection_string)
 
     # Configure primary OpenAI client with NO retries for immediate fallback
-    # Setting max_retries=0 ensures 429 errors raise immediately,
-    # allowing our retry logic to switch to secondary model without waiting
+    # We must create the AsyncAzureOpenAI client directly with max_retries=0
+    # because the AzureOpenAIChatClient doesn't pass max_retries to the underlying client
+    primary_async_client = AsyncAzureOpenAI(
+        azure_endpoint=endpoint,
+        azure_deployment=deployment_name,
+        api_key=api_key,
+        api_version=api_version or "2024-02-15-preview",
+        max_retries=0,   # No retries - fail immediately to trigger fallback
+        timeout=120.0,   # Total timeout for request
+    )
+
     llm = AzureOpenAIChatClient(
         endpoint=endpoint or None,
         deployment_name=deployment_name or None,
         api_key=api_key or None,
         api_version=api_version or None,
-        max_retries=0,   # No retries - fail immediately to trigger fallback
-        timeout=120.0,   # Total timeout for request
+        async_client=primary_async_client,  # Use pre-configured client with no retries
     )
 
     # Configure secondary/fallback OpenAI client if available

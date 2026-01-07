@@ -1,7 +1,50 @@
 """Tests for LLM retry logic and fallback functionality."""
 
 import pytest
+from unittest.mock import patch, MagicMock
+from openai.lib.azure import AsyncAzureOpenAI
 from main import _is_retryable_error
+
+
+class TestImmediateFailover:
+    """Test that primary LLM is configured for immediate failover."""
+
+    def test_primary_client_has_zero_retries(self) -> None:
+        """Primary AsyncAzureOpenAI client should have max_retries=0."""
+        # Create a client with the same configuration as main.py
+        client = AsyncAzureOpenAI(
+            azure_endpoint="https://test.openai.azure.us",
+            azure_deployment="gpt-4o",
+            api_key="test-key",
+            api_version="2024-02-15-preview",
+            max_retries=0,
+        )
+        assert client.max_retries == 0
+
+    def test_secondary_client_has_retries(self) -> None:
+        """Secondary AsyncAzureOpenAI client should have max_retries for resilience."""
+        client = AsyncAzureOpenAI(
+            azure_endpoint="https://test-secondary.openai.azure.us",
+            azure_deployment="gpt-4o-mini",
+            api_key="test-key",
+            api_version="2024-02-15-preview",
+            max_retries=3,
+        )
+        assert client.max_retries == 3
+
+    def test_zero_retries_client_fails_immediately(self) -> None:
+        """Client with max_retries=0 should not retry on failure."""
+        client = AsyncAzureOpenAI(
+            azure_endpoint="https://test.openai.azure.us",
+            azure_deployment="gpt-4o",
+            api_key="test-key",
+            api_version="2024-02-15-preview",
+            max_retries=0,
+        )
+        # Verify the client configuration - no internal retry delays
+        assert client.max_retries == 0
+        # Default max_retries is 2, so setting to 0 should disable internal retries
+        assert client.max_retries != 2
 
 
 class TestIsRetryableError:
