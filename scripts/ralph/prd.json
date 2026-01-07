@@ -103,6 +103,19 @@
       "passes": true,
       "notes": "Fixed by explicitly clearing thread/agent state in on_chat_start and adding on_chat_end cleanup handler"
     },
-
+ {
+      "id": "US-007",
+      "title": "number of tokens used",
+      "acceptanceCriteria": [
+        "as a part of the chat response, log the number of tokens used in query, tool use, and response",
+        "This should reset on each chat",
+        "this should not be shown to the user",
+        "mypy type checking passes",
+        "pytest tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented token usage tracking using UsageDetails from agent_framework. Logs per-request and cumulative session tokens."
+    },
   ]
 }

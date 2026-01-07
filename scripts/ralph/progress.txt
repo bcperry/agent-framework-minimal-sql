@@ -16,6 +16,7 @@ Started: 2024-01-15
 - Immediate Failover: AzureOpenAIChatClient doesn't pass max_retries to underlying client - create AsyncAzureOpenAI directly with max_retries=0 and pass via async_client param
 - Context Preservation: On failover, pass None for message and reuse existing thread to preserve tool call results
 - New Chat Sessions: Always clear thread/agent state at start of on_chat_start and add @cl.on_chat_end handler for cleanup
+- Token Usage: Import UsageContent/UsageDetails from agent_framework._types. Track usage via content_type == "usage" in stream, use UsageDetails += for cumulative counts
 
 ## Key Files
 - main.py - Main Chainlit app with LLM and agent configuration
@@ -111,4 +112,19 @@ Started: 2024-01-15
   - Use @cl.on_chat_end decorator to clean up resources when chat ends
   - AgentThread objects can be pickled but not JSON serialized - they won't persist across sessions properly
   - Pre-existing mypy errors (pyodbc, AzureKeyCredential, decorator types) are unrelated to retry/failover logic
+---
+
+## 2026-01-07 - US-007
+- What was implemented: Added token usage logging for LLM requests
+- Files changed:
+  - `main.py` - Added UsageDetails import, track tokens in _run_agent_stream, store/log cumulative session tokens
+  - `tests/test_retry_logic.py` - Added TestTokenUsage class with 8 tests for token usage functionality
+- **Learnings:**
+  - agent_framework provides UsageContent and UsageDetails types for token tracking
+  - UsageDetails has input_token_count, output_token_count, total_token_count fields
+  - UsageDetails supports addition (__add__, __iadd__) for combining token counts
+  - Token usage comes in stream response as content_type == "usage" with details dict
+  - _run_agent_stream must return Tuple[Optional[cl.Message], Optional[UsageDetails]] for caller to track usage
+  - Initialize session token_usage with UsageDetails() (not None) for proper += operations
+  - Pre-existing mypy errors in rag_tools.py and decorator types are unrelated to token tracking
 ---
