@@ -1,11 +1,12 @@
 import os
 import chainlit as cl
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
 from openai.lib.azure import AsyncAzureOpenAI
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatAgent, AgentThread
+from agent_framework._types import UsageContent, UsageDetails
 from tools import SqlDatabase
 from rag_tools import semantic_search, list_facets
 from custom_oauth import AzureGovOAuthProvider, AzureGovHybridOAuthProvider
@@ -141,6 +142,8 @@ async def on_chat_start():
     cl.user_session.set("thread", None)
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
+    # Reset token usage counter for new chat session
+    cl.user_session.set("token_usage", UsageDetails())
     
     # Setup Semantic Kernel
     app_user = cl.user_session.get("user")
@@ -292,10 +295,20 @@ async def on_chat_start():
 async def on_chat_end():
     """Clean up session data when chat ends."""
     logger.info("Chat session ending, cleaning up resources")
+    # Log final token usage for the session
+    token_usage: Optional[UsageDetails] = cl.user_session.get("token_usage")
+    if token_usage:
+        logger.info(
+            "Session token usage - Input: %s, Output: %s, Total: %s",
+            token_usage.input_token_count or 0,
+            token_usage.output_token_count or 0,
+            token_usage.total_token_count or 0,
+        )
     # Clear thread and agents to ensure no state leaks to next session
     cl.user_session.set("thread", None)
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
+    cl.user_session.set("token_usage", None)
 
 
 def _is_retryable_error(e: Exception) -> bool:
@@ -319,8 +332,8 @@ async def _run_agent_stream(
     tools: list,
     thread: AgentThread,
     parent_message_id: str,
-) -> Optional[cl.Message]:
-    """Run agent stream and handle response rendering. Returns the answer message or None.
+) -> Tuple[Optional[cl.Message], Optional[UsageDetails]]:
+    """Run agent stream and handle response rendering. Returns the answer message and usage or None.
     
     Args:
         agent: The ChatAgent to run
@@ -328,10 +341,14 @@ async def _run_agent_stream(
         tools: The tools available to the agent
         thread: The conversation thread (may contain prior context from failed primary agent)
         parent_message_id: The parent message ID for UI steps
+    
+    Returns:
+        A tuple of (answer message, usage details) - either may be None
     """
     answer: Optional[cl.Message] = None
     active_steps: dict = {}
     current_call_id: Optional[str] = None
+    request_usage: Optional[UsageDetails] = None
 
     async for msg in agent.run_stream(message_content, tools=tools, thread=thread):
         msg_dict = msg.to_dict()
@@ -369,12 +386,22 @@ async def _run_agent_stream(
                         await active_steps[call_id].update()
                         del active_steps[call_id]
 
+                elif content_type == "usage":
+                    # Extract token usage from the response
+                    details = content.get("details", {})
+                    usage = UsageDetails(
+                        input_token_count=details.get("input_token_count"),
+                        output_token_count=details.get("output_token_count"),
+                        total_token_count=details.get("total_token_count"),
+                    )
+                    request_usage = (request_usage + usage) if request_usage else usage
+
         if getattr(msg, "text", None):
             if answer is None:
                 answer = cl.Message(content="")
             await answer.stream_token(msg.text)
 
-    return answer
+    return answer, request_usage
 
 
 @cl.on_message
@@ -399,11 +426,12 @@ async def on_message(message: cl.Message):
         tools = db_tools + ai_search
 
     answer: Optional[cl.Message] = None
+    request_usage: Optional[UsageDetails] = None
     used_fallback = False
 
     try:
         # Try primary agent first
-        answer = await _run_agent_stream(
+        answer, request_usage = await _run_agent_stream(
             agent, message.content, tools, thread, message.id
         )
     except Exception as e:
@@ -421,7 +449,7 @@ async def on_message(message: cl.Message):
                 # Reuse the existing thread to preserve any tool calls and results
                 # from the primary agent's partial execution. Pass None for message
                 # since it's already in the thread context.
-                answer = await _run_agent_stream(
+                answer, request_usage = await _run_agent_stream(
                     secondary_agent, None, tools, thread, message.id
                 )
                 used_fallback = True
@@ -451,6 +479,27 @@ async def on_message(message: cl.Message):
             ).send()
             cl.user_session.set("thread", thread)
             return
+
+    # Update cumulative token usage for the session
+    if request_usage:
+        session_usage: Optional[UsageDetails] = cl.user_session.get("token_usage")
+        if session_usage:
+            session_usage += request_usage
+        else:
+            session_usage = request_usage
+        cl.user_session.set("token_usage", session_usage)
+        
+        # Log token usage for this request (not shown to user)
+        logger.info(
+            "Request token usage - Input: %s, Output: %s, Total: %s | "
+            "Session cumulative - Input: %s, Output: %s, Total: %s",
+            request_usage.input_token_count or 0,
+            request_usage.output_token_count or 0,
+            request_usage.total_token_count or 0,
+            session_usage.input_token_count or 0,
+            session_usage.output_token_count or 0,
+            session_usage.total_token_count or 0,
+        )
 
     # Send the final message if not already sent
     if answer:

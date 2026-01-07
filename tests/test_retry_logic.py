@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from openai.lib.azure import AsyncAzureOpenAI
 from main import _is_retryable_error
+from agent_framework._types import UsageDetails
 
 
 class TestImmediateFailover:
@@ -202,3 +203,100 @@ class TestNewChatSession:
         # Verify threads are different objects (new thread for each chat)
         assert thread1 is not thread2
         assert id(thread1) != id(thread2)
+
+
+class TestTokenUsage:
+    """Test token usage tracking functionality."""
+
+    def test_usage_details_initialization(self) -> None:
+        """UsageDetails can be initialized with token counts."""
+        usage = UsageDetails(
+            input_token_count=100,
+            output_token_count=50,
+            total_token_count=150,
+        )
+        assert usage.input_token_count == 100
+        assert usage.output_token_count == 50
+        assert usage.total_token_count == 150
+
+    def test_usage_details_addition(self) -> None:
+        """UsageDetails instances can be added together."""
+        usage1 = UsageDetails(
+            input_token_count=100,
+            output_token_count=50,
+            total_token_count=150,
+        )
+        usage2 = UsageDetails(
+            input_token_count=200,
+            output_token_count=100,
+            total_token_count=300,
+        )
+        combined = usage1 + usage2
+        assert combined.input_token_count == 300
+        assert combined.output_token_count == 150
+        assert combined.total_token_count == 450
+
+    def test_usage_details_iadd(self) -> None:
+        """UsageDetails supports in-place addition."""
+        usage1 = UsageDetails(
+            input_token_count=100,
+            output_token_count=50,
+            total_token_count=150,
+        )
+        usage2 = UsageDetails(
+            input_token_count=200,
+            output_token_count=100,
+            total_token_count=300,
+        )
+        usage1 += usage2
+        assert usage1.input_token_count == 300
+        assert usage1.output_token_count == 150
+        assert usage1.total_token_count == 450
+
+    def test_usage_details_empty_initialization(self) -> None:
+        """UsageDetails can be initialized with no arguments."""
+        usage = UsageDetails()
+        assert usage.input_token_count is None
+        assert usage.output_token_count is None
+        assert usage.total_token_count is None
+
+    def test_run_agent_stream_returns_tuple(self) -> None:
+        """_run_agent_stream should return a tuple of (answer, usage)."""
+        from main import _run_agent_stream
+        import inspect
+        
+        sig = inspect.signature(_run_agent_stream)
+        annotation_str = str(sig.return_annotation)
+        # Should return Tuple[Optional[cl.Message], Optional[UsageDetails]]
+        assert "Tuple" in annotation_str or "tuple" in annotation_str
+
+    def test_on_chat_start_initializes_token_usage(self) -> None:
+        """on_chat_start should initialize token_usage in session."""
+        import inspect
+        import main
+        
+        source = inspect.getsource(main.on_chat_start)
+        
+        # Check that on_chat_start initializes token_usage
+        assert 'cl.user_session.set("token_usage"' in source
+
+    def test_on_chat_end_clears_token_usage(self) -> None:
+        """on_chat_end should clear token_usage from session."""
+        import inspect
+        import main
+        
+        source = inspect.getsource(main.on_chat_end)
+        
+        # Check that on_chat_end clears token_usage
+        assert 'cl.user_session.set("token_usage", None)' in source
+
+    def test_on_message_logs_token_usage(self) -> None:
+        """on_message should log token usage."""
+        import inspect
+        import main
+        
+        source = inspect.getsource(main.on_message)
+        
+        # Check that on_message logs token usage
+        assert 'Request token usage' in source
+        assert 'Session cumulative' in source
