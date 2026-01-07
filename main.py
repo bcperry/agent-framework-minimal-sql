@@ -149,8 +149,11 @@ async def on_chat_start():
     secondary_endpoint = os.getenv("AZURE_OPENAI_SECONDARY_ENDPOINT", "")
     secondary_deployment_name = os.getenv("AZURE_OPENAI_SECONDARY_MODEL", "")
     secondary_api_key = os.getenv("AZURE_OPENAI_SECONDARY_API_KEY", "")
-    secondary_api_version = os.getenv(
-        "AZURE_OPENAI_SECONDARY_API_VERSION", api_version
+    # Use secondary API version, fallback to primary, or use default
+    secondary_api_version = (
+        os.getenv("AZURE_OPENAI_SECONDARY_API_VERSION")
+        or api_version
+        or "2024-02-15-preview"
     )
 
     logger.info(
@@ -208,11 +211,16 @@ async def on_chat_start():
     # Configure secondary/fallback OpenAI client if available
     secondary_llm: Optional[AzureOpenAIChatClient] = None
     if has_secondary_llm:
+        logger.info(
+            "Initializing secondary Azure OpenAI client (endpoint=%s, deployment=%s)",
+            secondary_endpoint,
+            secondary_deployment_name,
+        )
         secondary_llm = AzureOpenAIChatClient(
-            endpoint=secondary_endpoint or None,
-            deployment_name=secondary_deployment_name or None,
-            api_key=secondary_api_key or None,
-            api_version=secondary_api_version or None,
+            endpoint=secondary_endpoint,
+            deployment_name=secondary_deployment_name,
+            api_key=secondary_api_key,
+            api_version=secondary_api_version,
             max_retries=3,
             timeout=120.0,
         )
