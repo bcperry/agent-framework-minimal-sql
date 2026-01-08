@@ -139,19 +139,26 @@ az webapp up --resource-group <your-resource-group> --name <your-app-service-nam
 
 See [az webapp up documentation](https://learn.microsoft.com/en-us/cli/azure/webapp?view=azure-cli-latest#az-webapp-up) for more options.
 
-**Update app settings from a JSON file:**
+**App Settings Import/Export:**
 
-1. Export your current settings (optional):
-   ```powershell
+1. Export current settings:
+   ```bash
    az webapp config appsettings list --resource-group <your-resource-group> --name <your-app-service-name> > settings.json
    ```
 
-2. Edit `settings.json` with your configuration, then apply:
-   ```powershell
-   az webapp config appsettings set --resource-group <your-resource-group> --name <your-app-service-name> --settings @settings.json
+2. Convert to import format (the export format isn't directly importable):
+   ```bash
+   jq 'map({(.name): .value}) | add' settings.json > settings_import.json
    ```
 
-See [Edit app settings in bulk](https://learn.microsoft.com/en-us/azure/app-service/configure-common?tabs=cli#edit-app-settings-in-bulk) for more details on bulk configuration.
+3. Import settings to another App Service:
+   ```bash
+   az webapp config appsettings set --resource-group <your-resource-group> --name <your-app-service-name> --settings @settings_import.json
+   ```
+
+> **Note:** The `list` command outputs `[{"name": "KEY", "value": "VAL"}, ...]` but `set` requires `{"KEY": "VAL", ...}`. The `jq` command handles this conversion.
+
+See [Edit app settings in bulk](https://learn.microsoft.com/en-us/azure/app-service/configure-common?tabs=cli#edit-app-settings-in-bulk) for more details.
 
 ## Development
 
