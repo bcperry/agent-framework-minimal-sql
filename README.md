@@ -159,8 +159,15 @@ See [az webapp up documentation](https://learn.microsoft.com/en-us/cli/azure/web
    ```
 
 3. Import settings to another App Service:
+   
+   **Bash:**
    ```bash
    az webapp config appsettings set --resource-group <your-resource-group> --name <your-app-service-name> --settings @settings_import.json
+   ```
+   
+   **PowerShell:**
+   ```powershell
+   az webapp config appsettings set --resource-group <your-resource-group> --name <your-app-service-name> --settings '@settings_import.json'
    ```
 
 > **Note:** The `list` command outputs `[{"name": "KEY", "value": "VAL"}, ...]` but `set` requires `{"KEY": "VAL", ...}`. The `jq` command handles this conversion.
