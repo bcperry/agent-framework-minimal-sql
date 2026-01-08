@@ -33,7 +33,7 @@ class SqlDatabase:
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
         self._credential = None
-        self._init_credential()
+        # self._init_credential()
         self.get_conn()
 
     def _init_credential(self):
