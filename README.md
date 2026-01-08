@@ -147,8 +147,15 @@ See [az webapp up documentation](https://learn.microsoft.com/en-us/cli/azure/web
    ```
 
 2. Convert to import format (the export format isn't directly importable):
+   
+   **Bash (using jq):**
    ```bash
    jq 'map({(.name): .value}) | add' settings.json > settings_import.json
+   ```
+   
+   **PowerShell:**
+   ```powershell
+   (Get-Content settings.json | ConvertFrom-Json) | ForEach-Object -Begin { $h = @{} } -Process { $h[$_.name] = $_.value } -End { $h } | ConvertTo-Json | Set-Content settings_import.json
    ```
 
 3. Import settings to another App Service:
