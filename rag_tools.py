@@ -17,7 +17,17 @@ logger = logging.getLogger(__name__)
 
 _ENV_DIRECTORY = Path.cwd() / ".azure"
 _ENV_PREFIX = "avcoe-*"
-_DEFAULT_SELECT_FIELDS = ["title", "chunk"]
+# Default fields to return (excludes large vector embeddings for efficiency)
+# Set to None to return all fields, or customize to match your index schema
+_DEFAULT_SELECT_FIELDS: List[str] = [
+    "content_id",
+    "text_document_id",
+    "document_title",
+    "image_document_id",
+    "content_text",
+    "content_path",
+    "locationMetadata",
+]
 
 
 def _make_jsonable(value: Any) -> Any:
@@ -105,7 +115,7 @@ def _get_search_client(index_name: Optional[str] = None) -> SearchClient:
 
 
 async def list_facets(
-    facet_name: str = "title",
+    facet_name: str,
     search_text: str = "*",
 ) -> Dict[str, Any]:
     """Retrieve faceted navigation values from the Azure AI Search index.
@@ -114,8 +124,8 @@ async def list_facets(
     commonly used to build filters or understand the distribution of values across documents.
 
     Args:
-        facet_name: The name of the field to facet on (e.g., "title", "category", "author").
-                   Must be a facetable field in your search index schema. Defaults to "title".
+        facet_name: The name of the field to facet on (e.g., "category", "author", "source").
+                   Must be a facetable field in your search index schema.
         search_text: Optional search query to scope the facet results. Use "*" (default) to
                     retrieve facets across all documents, or provide a query string to only
                     facet within matching documents.
@@ -129,9 +139,9 @@ async def list_facets(
           - count: Number of documents with this value
 
     Example use cases:
-        - List all unique document titles: list_facets(facet_name="title")
-        - Get category distribution: list_facets(facet_name="category")
-        - Find authors in security-related docs: list_facets(facet_name="author", search_text="security")
+        - List all unique document titles: list_facets(facet_name="document_title")
+        - Get document IDs: list_facets(facet_name="text_document_id")
+        - Find titles in security-related docs: list_facets(facet_name="document_title", search_text="security")
 
     Raises:
         RuntimeError: If the search service is unreachable or the field is not facetable.
@@ -187,6 +197,7 @@ async def semantic_search(
     query: str,
     top: int = 3,
     facet_value: Optional[str] = None,
+    filter_field: Optional[str] = None,
     select_fields: Optional[List[str]] = None,
     query_type: str = "semantic",
 ) -> Dict[str, Any]:
@@ -204,14 +215,19 @@ async def semantic_search(
         top: Maximum number of documents to return (default: 3). Higher values provide more
             context but may include less relevant results. Typical range: 1-10 for RAG scenarios.
 
-        facet_value: Optional filter to restrict search to documents with a specific title value.
+        facet_value: Optional filter value to restrict search to documents matching this value.
                     Use this to scope searches within a particular document or category.
-                    Example: "DoD Unmanned Systems Roadmap 2020" to search only within that document.
+                    Must be used together with filter_field to specify which field to filter on.
                     The value is automatically escaped for safe OData filter expressions.
 
-        select_fields: List of field names to include in results (default: ["title", "chunk"]).
-                      Reduces payload size and focuses on relevant fields. Common fields include:
-                      "title", "chunk", "content", "metadata", "url", etc.
+        filter_field: The field name to use for filtering when facet_value is provided.
+                     Example: filter_field="document_title", facet_value="Flight Manual" creates
+                     filter: document_title eq 'Flight Manual'
+
+        select_fields: List of field names to include in results (default: None = all fields).
+                      Reduces payload size and focuses on relevant fields. Discover available
+                      fields by running a search without select_fields first, or check your
+                      index schema in the Azure portal.
 
         query_type: Search algorithm to use. Options:
                    - "semantic" (default): Uses AI-powered semantic ranking for best relevance
@@ -230,9 +246,9 @@ async def semantic_search(
 
     Example use cases:
         - Answer questions: semantic_search("what are the safety requirements?")
-        - Find specific info in a document: semantic_search("launch procedures", facet_value="Flight Manual")
+        - Filter by document: semantic_search("launch procedures", filter_field="document_title", facet_value="Flight Manual")
         - Get diverse results: semantic_search("drone regulations", top=10)
-        - Retrieve full documents: semantic_search("policy overview", select_fields=["title", "content", "metadata"])
+        - Select specific fields: semantic_search("policy overview", select_fields=["document_title", "content_text", "content_path"])
 
     Best practices:
         - Use semantic search (default) for natural language queries and Q&A
@@ -270,16 +286,17 @@ async def semantic_search(
         raise ValueError(f"query_type must be one of {sorted(allowed_query_types)}")
 
     filter_expression: Optional[str] = None
-    if facet_value:
-        filter_expression = f"title eq '{_escape_filter_value(facet_value)}'"
+    if facet_value and filter_field:
+        filter_expression = f"{filter_field} eq '{_escape_filter_value(facet_value)}'"
 
     def _run() -> Dict[str, Any]:
         search_kwargs: Dict[str, Any] = {
             "include_total_count": True,
             "top": top,
-            "select": select,
             "query_type": query_type,
         }
+        if select:
+            search_kwargs["select"] = select
         if filter_expression:
             search_kwargs["filter"] = filter_expression
 

@@ -19,39 +19,40 @@ logger = logging.getLogger(__name__)
 AI_SEARCH_BOT_PROFILE = "Technical Maintenance AI"
 SQL_BOT_PROFILE = "Tactical Readiness AI"
 
+## TODO: Enable Azure Government OAuth providers once we have the creds
 
-# Register Azure Government OAuth providers by adding them to the module
-# These will be automatically discovered by Chainlit
-azure_gov_provider = AzureGovOAuthProvider()
-azure_gov_hybrid_provider = AzureGovHybridOAuthProvider()
+# # Register Azure Government OAuth providers by adding them to the module
+# # These will be automatically discovered by Chainlit
+# azure_gov_provider = AzureGovOAuthProvider()
+# azure_gov_hybrid_provider = AzureGovHybridOAuthProvider()
 
-if azure_gov_provider.is_configured():
-    # Register the provider by importing it into the module namespace
-    import chainlit.oauth_providers as oauth_module
+# if azure_gov_provider.is_configured():
+#     # Register the provider by importing it into the module namespace
+#     import chainlit.oauth_providers as oauth_module
 
-    oauth_module.providers.append(azure_gov_provider)
-    logger.info("Registered Azure Government OAuth provider")
+#     oauth_module.providers.append(azure_gov_provider)
+#     logger.info("Registered Azure Government OAuth provider")
 
-if azure_gov_hybrid_provider.is_configured():
-    import chainlit.oauth_providers as oauth_module
+# if azure_gov_hybrid_provider.is_configured():
+#     import chainlit.oauth_providers as oauth_module
 
-    oauth_module.providers.append(azure_gov_hybrid_provider)
-    logger.info("Registered Azure Government Hybrid OAuth provider")
+#     oauth_module.providers.append(azure_gov_hybrid_provider)
+#     logger.info("Registered Azure Government Hybrid OAuth provider")
 
-@cl.oauth_callback
-def oauth_callback(
-    provider_id: str,
-    token: str,
-    raw_user_data: Dict[str, str],
-    default_user: cl.User,
-) -> Optional[cl.User]:
-    # Customize user metadata for Azure Government users if needed
-    if provider_id in ["azure-gov", "azure-gov-hybrid"]:
-        default_user.metadata = {
-            **default_user.metadata,
-            "azure_gov_user": True,
-        }
-    return default_user
+# @cl.oauth_callback
+# def oauth_callback(
+#     provider_id: str,
+#     token: str,
+#     raw_user_data: Dict[str, str],
+#     default_user: cl.User,
+# ) -> Optional[cl.User]:
+#     # Customize user metadata for Azure Government users if needed
+#     if provider_id in ["azure-gov", "azure-gov-hybrid"]:
+#         default_user.metadata = {
+#             **default_user.metadata,
+#             "azure_gov_user": True,
+#         }
+#     return default_user
 
 
 @cl.set_chat_profiles
