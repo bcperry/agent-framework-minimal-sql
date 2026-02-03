@@ -31,3 +31,5 @@ terraform.rc
 
 .mypy_cache/
 .pytest_cache/
+# Certificates
+certs/

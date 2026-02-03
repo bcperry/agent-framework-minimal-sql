@@ -1,0 +1,19 @@
+<div class="disclaimer">
+
+## ⚠️ WARNING ⚠️
+
+**You are accessing a proprietary information system.**
+
+This information system, including all related equipment, networks, and network devices (specifically including Internet access), is provided only for authorized company use. Unauthorized or improper use of this system may result in disciplinary action, as well as civil and criminal penalties.
+
+**By using this information system, you understand and consent to the following:**
+
+- You have no reasonable expectation of privacy regarding any communication or data transiting or stored on this information system. At any time, and for any lawful purpose, the company may monitor, intercept, search, and seize any communication or data transiting or stored on this information system.
+
+- Any communication or data transiting or stored on this information system may be disclosed or used for any lawful company purpose.
+
+- This AI system may produce inaccurate information. Always verify critical information through official channels.
+
+- **Do not enter sensitive information into this system.**
+
+</div>

@@ -19,40 +19,73 @@ logger = logging.getLogger(__name__)
 AI_SEARCH_BOT_PROFILE = "Technical Maintenance AI"
 SQL_BOT_PROFILE = "Tactical Readiness AI"
 
+# Track users who have agreed to disclaimer (persists across profile changes)
+# Key: user identifier, Value: True if agreed
+_agreed_users: Dict[str, bool] = {}
+
+# Load disclaimer text from file at startup
+_disclaimer_text: str = ""
+_disclaimer_path = os.path.join(os.path.dirname(__file__), "disclaimer.txt")
+if os.path.exists(_disclaimer_path):
+    with open(_disclaimer_path, "r", encoding="utf-8") as f:
+        _disclaimer_text = f.read()
+    logger.info("Loaded disclaimer from disclaimer.txt")
+else:
+    logger.warning("disclaimer.txt not found, using empty disclaimer")
+
 ## TODO: Enable Azure Government OAuth providers once we have the creds
 
-# # Register Azure Government OAuth providers by adding them to the module
-# # These will be automatically discovered by Chainlit
-# azure_gov_provider = AzureGovOAuthProvider()
-# azure_gov_hybrid_provider = AzureGovHybridOAuthProvider()
+# Register Azure Government OAuth providers by adding them to the module
+# These will be automatically discovered by Chainlit
+azure_gov_provider = AzureGovOAuthProvider()
+azure_gov_hybrid_provider = AzureGovHybridOAuthProvider()
 
-# if azure_gov_provider.is_configured():
-#     # Register the provider by importing it into the module namespace
-#     import chainlit.oauth_providers as oauth_module
+if azure_gov_provider.is_configured():
+    # Register the provider by importing it into the module namespace
+    import chainlit.oauth_providers as oauth_module
 
-#     oauth_module.providers.append(azure_gov_provider)
-#     logger.info("Registered Azure Government OAuth provider")
+    oauth_module.providers.append(azure_gov_provider)
+    logger.info("Registered Azure Government OAuth provider")
 
-# if azure_gov_hybrid_provider.is_configured():
-#     import chainlit.oauth_providers as oauth_module
+if azure_gov_hybrid_provider.is_configured():
+    import chainlit.oauth_providers as oauth_module
 
-#     oauth_module.providers.append(azure_gov_hybrid_provider)
-#     logger.info("Registered Azure Government Hybrid OAuth provider")
+    oauth_module.providers.append(azure_gov_hybrid_provider)
+    logger.info("Registered Azure Government Hybrid OAuth provider")
 
-# @cl.oauth_callback
-# def oauth_callback(
-#     provider_id: str,
-#     token: str,
-#     raw_user_data: Dict[str, str],
-#     default_user: cl.User,
-# ) -> Optional[cl.User]:
-#     # Customize user metadata for Azure Government users if needed
-#     if provider_id in ["azure-gov", "azure-gov-hybrid"]:
-#         default_user.metadata = {
-#             **default_user.metadata,
-#             "azure_gov_user": True,
-#         }
-#     return default_user
+@cl.oauth_callback
+def oauth_callback(
+    provider_id: str,
+    token: str,
+    raw_user_data: Dict[str, str],
+    default_user: cl.User,
+) -> Optional[cl.User]:
+    # Customize user metadata for Azure Government users if needed
+    if provider_id in ["azure-gov", "azure-gov-hybrid"]:
+        default_user.metadata = {
+            **default_user.metadata,
+            "azure_gov_user": True,
+        }
+    return default_user
+
+
+@cl.action_callback("agree_button")
+async def on_agree(action: cl.Action):
+    """Handle user agreement to terms - removes the splash screen entirely."""
+    cl.user_session.set("agreed", True)
+    
+    # Store in module-level dict to persist across profile changes
+    user = cl.user_session.get("user")
+    if user and user.identifier:
+        _agreed_users[user.identifier] = True
+        logger.info(f"User {user.identifier} agreed to disclaimer")
+    
+    # Remove the entire disclaimer message (splash screen)
+    disclaimer_msg = cl.user_session.get("disclaimer_message")
+    if disclaimer_msg:
+        await disclaimer_msg.remove()
+    
+    # No confirmation message - just proceed to clean chat
 
 
 @cl.set_chat_profiles
@@ -143,8 +176,34 @@ async def on_chat_start():
     cl.user_session.set("thread", None)
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
+    
+    # Check agreement status from module-level dict (persists across profile changes)
+    already_agreed = cl.user_session.get("agreed", False)
+    if not already_agreed:
+        user = cl.user_session.get("user")
+        if user and user.identifier and _agreed_users.get(user.identifier):
+            already_agreed = True
+            cl.user_session.set("agreed", True)
+            logger.info(f"User {user.identifier} already agreed to disclaimer")
+    
     # Reset token usage counter for new chat session
     cl.user_session.set("token_usage", UsageDetails())
+
+    # Only show splash page if user hasn't already agreed this session
+    if not already_agreed and _disclaimer_text:
+        actions = [
+            cl.Action(
+                name="agree_button",
+                payload={"agreed": True},
+                label="I AGREE",
+                icon="check",
+            )
+        ]
+
+        disclaimer_msg = cl.Message(content=_disclaimer_text, actions=actions)
+        await disclaimer_msg.send()
+        # Store the message so we can remove it when user agrees
+        cl.user_session.set("disclaimer_message", disclaimer_msg)
     
     # Setup Semantic Kernel
     app_user = cl.user_session.get("user")
@@ -407,6 +466,13 @@ async def _run_agent_stream(
 
 @cl.on_message
 async def on_message(message: cl.Message):
+    # Check if user has agreed to terms
+    if not cl.user_session.get("agreed"):
+        await cl.Message(
+            content="⚠️ Please click **'I Agree to the Terms'** above before continuing."
+        ).send()
+        return
+
     agent = cl.user_session.get("agent")
     secondary_agent = cl.user_session.get("secondary_agent")
     tools = cl.user_session.get("tools")

@@ -93,3 +93,102 @@ main {
     backdrop-filter: blur(5px) !important;
 }
 
+/* ============================================
+   DISCLAIMER STYLING
+   ============================================ */
+
+/* Container for the disclaimer */
+.disclaimer {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%) !important;
+    border: 4px solid #ffc107 !important;
+    border-radius: 12px !important;
+    padding: 24px 32px !important;
+    margin: 16px 0 !important;
+    color: #ffffff !important;
+    box-shadow: 0 8px 32px rgba(255, 193, 7, 0.3), inset 0 0 60px rgba(255, 193, 7, 0.05) !important;
+    position: relative !important;
+}
+
+/* Warning header styling */
+.disclaimer h2 {
+    color: #ffc107 !important;
+    text-align: center !important;
+    font-size: 1.8rem !important;
+    font-weight: 700 !important;
+    margin-bottom: 20px !important;
+    text-shadow: 0 0 10px rgba(255, 193, 7, 0.5) !important;
+    letter-spacing: 2px !important;
+}
+
+/* Bold text (key warnings) */
+.disclaimer strong {
+    color: #ffc107 !important;
+    font-weight: 600 !important;
+}
+
+/* Regular paragraph text */
+.disclaimer p {
+    color: #e0e0e0 !important;
+    font-size: 1rem !important;
+    line-height: 1.7 !important;
+    margin-bottom: 16px !important;
+}
+
+/* List items */
+.disclaimer ul {
+    margin: 16px 0 !important;
+    padding-left: 0 !important;
+}
+
+.disclaimer li {
+    color: #e0e0e0 !important;
+    font-size: 0.95rem !important;
+    line-height: 1.6 !important;
+    margin-bottom: 12px !important;
+    padding-left: 24px !important;
+    position: relative !important;
+    list-style: none !important;
+}
+
+.disclaimer li::before {
+    content: "•" !important;
+    color: #ffc107 !important;
+    font-weight: bold !important;
+    position: absolute !important;
+    left: 8px !important;
+}
+
+/* Special styling for the classified warning */
+.disclaimer li:last-child {
+    background-color: rgba(220, 53, 69, 0.2) !important;
+    border: 2px solid #dc3545 !important;
+    border-radius: 8px !important;
+    padding: 12px 12px 12px 32px !important;
+    margin-top: 20px !important;
+}
+
+.disclaimer li:last-child strong {
+    color: #ff6b6b !important;
+}
+
+/* Style the I AGREE button to be prominent */
+button[id*="agree"] {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    font-size: 1.1rem !important;
+    padding: 12px 32px !important;
+    border: none !important;
+    border-radius: 8px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4) !important;
+    transition: all 0.3s ease !important;
+}
+
+button[id*="agree"]:hover {
+    background: linear-gradient(135deg, #218838 0%, #1aa179 100%) !important;
+    box-shadow: 0 6px 20px rgba(40, 167, 69, 0.6) !important;
+    transform: translateY(-2px) !important;
+}
+
