@@ -192,3 +192,117 @@ button[id*="agree"]:hover {
     transform: translateY(-2px) !important;
 }
 
+/* ============================================
+   LOGIN PAGE FULL-SCREEN DISCLAIMER OVERLAY
+   ============================================ */
+
+.login-disclaimer-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.login-disclaimer-overlay .disclaimer-container {
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+    margin: 20px;
+}
+
+.login-disclaimer-overlay .disclaimer-content {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    border: 3px solid #c9a227;
+    border-radius: 12px;
+    padding: 40px;
+    color: #f0f0f0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    box-shadow: 0 0 50px rgba(201, 162, 39, 0.3);
+}
+
+.login-disclaimer-overlay h1 {
+    text-align: center;
+    color: #c9a227;
+    font-size: 2rem;
+    margin-bottom: 10px;
+    text-shadow: 0 0 10px rgba(201, 162, 39, 0.5);
+}
+
+.login-disclaimer-overlay h2 {
+    text-align: center;
+    color: #ffffff;
+    font-size: 1.3rem;
+    margin-bottom: 25px;
+    font-weight: 600;
+}
+
+.login-disclaimer-overlay h3 {
+    color: #c9a227;
+    font-size: 1.1rem;
+    margin: 25px 0 15px 0;
+}
+
+.login-disclaimer-overlay p {
+    line-height: 1.7;
+    margin-bottom: 15px;
+    color: #e0e0e0;
+}
+
+.login-disclaimer-overlay ul {
+    list-style-type: none;
+    padding: 0;
+    margin: 15px 0;
+}
+
+.login-disclaimer-overlay li {
+    padding: 12px 15px;
+    margin: 8px 0;
+    background: rgba(255, 255, 255, 0.05);
+    border-left: 4px solid #c9a227;
+    line-height: 1.6;
+}
+
+.login-disclaimer-overlay .classified-warning {
+    background: linear-gradient(90deg, #8b0000, #a52a2a);
+    color: #ffffff;
+    padding: 20px;
+    margin: 25px 0;
+    text-align: center;
+    border-radius: 8px;
+    font-size: 1.2rem;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 10px rgba(139, 0, 0, 0.5); }
+    50% { box-shadow: 0 0 25px rgba(139, 0, 0, 0.8); }
+}
+
+.login-disclaimer-overlay .acknowledge-btn {
+    display: block;
+    width: 100%;
+    padding: 18px 40px;
+    margin-top: 25px;
+    background: linear-gradient(90deg, #c9a227, #e6c84b);
+    color: #1a1a2e;
+    border: none;
+    border-radius: 8px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.login-disclaimer-overlay .acknowledge-btn:hover {
+    background: linear-gradient(90deg, #e6c84b, #ffd700);
+    transform: scale(1.02);
+    box-shadow: 0 5px 20px rgba(201, 162, 39, 0.4);
+}
