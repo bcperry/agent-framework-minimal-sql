@@ -200,30 +200,30 @@ class SqlDatabase:
             raise ValueError("Missing table_name argument")
 
         # Get column information
-        column_query = f"""
+        column_query = """
             SELECT 
                 COLUMN_NAME, 
                 DATA_TYPE, 
                 CHARACTER_MAXIMUM_LENGTH, 
                 IS_NULLABLE
             FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = '{table_name}'
+            WHERE TABLE_NAME = ?
         """
-        columns = self._execute_query(column_query)
+        columns = self._execute_query(column_query, (table_name,))
 
         # Get primary key information
-        pk_query = f"""
+        pk_query = """
             SELECT c.COLUMN_NAME
             FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE c
                 ON tc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
-            WHERE tc.TABLE_NAME = '{table_name}' 
+            WHERE tc.TABLE_NAME = ? 
                 AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
         """
-        primary_keys = self._execute_query(pk_query)
+        primary_keys = self._execute_query(pk_query, (table_name,))
 
         # Get foreign key information
-        fk_query = f"""
+        fk_query = """
             SELECT 
                 fk.CONSTRAINT_NAME,
                 c.COLUMN_NAME,
@@ -234,9 +234,9 @@ class SqlDatabase:
                 ON fk.CONSTRAINT_NAME = c.CONSTRAINT_NAME
             JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE c2
                 ON fk.UNIQUE_CONSTRAINT_NAME = c2.CONSTRAINT_NAME
-            WHERE c.TABLE_NAME = '{table_name}'
+            WHERE c.TABLE_NAME = ?
         """
-        foreign_keys = self._execute_query(fk_query)
+        foreign_keys = self._execute_query(fk_query, (table_name,))
 
         result = (
             "Columns:\n"

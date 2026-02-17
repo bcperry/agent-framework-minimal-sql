@@ -168,7 +168,10 @@ async def on_chat_start():
     
     # Setup Semantic Kernel
     app_user = cl.user_session.get("user")
-    logger.info(f"App user: {app_user}")
+    if app_user:
+        logger.info("App user identifier: %s", getattr(app_user, "identifier", "unknown"))
+    else:
+        logger.info("App user identifier: anonymous")
     # await cl.Message(f"Hello {app_user.identifier}").send()
 
     logger.info("Initializing new chat session")
@@ -224,7 +227,7 @@ async def on_chat_start():
 
     # Get connection string from environment
     connection_string = os.environ.get("AZURE_SQL_CONNECTIONSTRING")
-    print(f"Connected using: {connection_string}")
+    logger.info("SQL connection string configured: %s", bool(connection_string))
     if not connection_string:
         raise ValueError("AZURE_SQL_CONNECTIONSTRING environment variable is required")
 
@@ -300,8 +303,7 @@ async def on_chat_start():
         db_tool.describe_table,
         db_tool.read_query,
     ]
-    # search_tools = [semantic_search, list_facets]
-    search_tools = [semantic_search]
+    search_tools = [semantic_search, list_facets]
 
 
     thread = agent.get_new_thread()

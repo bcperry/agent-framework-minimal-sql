@@ -45,6 +45,14 @@ def _env_int(name: str, default: int) -> int:
 MAX_SEARCH_TOP = _env_int("MAX_SEARCH_TOP", 5)
 MAX_SEARCH_FIELD_CHARS = _env_int("MAX_SEARCH_FIELD_CHARS", 3000)
 MAX_SEARCH_PAYLOAD_CHARS = _env_int("MAX_SEARCH_PAYLOAD_CHARS", 15000)
+MAX_FACET_SAMPLE_DOCS = _env_int("MAX_FACET_SAMPLE_DOCS", 100)
+
+
+def _env_csv_set(name: str) -> set[str]:
+    raw = os.getenv(name, "")
+    if not raw:
+        return set()
+    return {item.strip() for item in raw.split(",") if item.strip()}
 
 
 def _truncate_text(value: str, max_chars: int, label: str) -> str:
@@ -113,6 +121,35 @@ def _escape_filter_value(value: str) -> str:
     """Escape single quotes for OData filter expressions."""
 
     return value.replace("'", "''")
+
+
+def _document_matches_field_value(document: Dict[str, Any], field: str, value: str) -> bool:
+    """Return True when a document field matches the requested filter value.
+
+    Supports scalar string values and list fields.
+    """
+
+    if field not in document:
+        return False
+
+    candidate = document.get(field)
+    if candidate is None:
+        return False
+
+    target = str(value).strip()
+    if isinstance(candidate, list):
+        return any(str(item).strip() == target for item in candidate)
+    return str(candidate).strip() == target
+
+
+def _is_non_filterable_error(error_text: str) -> bool:
+    lower = error_text.lower()
+    return (
+        "not filterable" in lower
+        or "not a filterable" in lower
+        or "isn't filterable" in lower
+        or "filterable field" in lower
+    )
 
 
 @lru_cache(maxsize=1)
@@ -209,52 +246,130 @@ async def list_facets(
     Raises:
         RuntimeError: If the search service is unreachable or the field is not facetable.
     """
-    # try:
-    #     client = _get_search_client()
-    # except Exception as e:
-    #     logger.exception("Failed to create SearchClient")
-    #     error_msg = f"Failed to create Search Client with error: {str(e)}"
-    #     return {
-    #         "error": error_msg,
-    #         "facet": facet_name,
-    #         "search_text": search_text,
-    #         "values": [],
-    #     }
+    try:
+        client = _get_search_client()
+    except Exception as exc:
+        logger.exception("Failed to create SearchClient")
+        return {
+            "error": f"Failed to create Search Client with error: {str(exc)}",
+            "facet": facet_name,
+            "search_text": search_text,
+            "mode": "error",
+            "values": [],
+        }
 
-    # def _run() -> List[Dict[str, Any]]:
-    #     results = client.search(
-    #         search_text,
-    #         facets=[facet_name],
-    #         top=0,
-    #     )
-    #     facets = results.get_facets().get(facet_name, [])
-    #     return [_make_jsonable(facet) for facet in facets]
+    def _run_facets() -> List[Dict[str, Any]]:
+        results = client.search(
+            search_text,
+            facets=[facet_name],
+            top=0,
+        )
+        facets = results.get_facets().get(facet_name, [])
+        return [_make_jsonable(facet) for facet in facets]
 
-    # try:
-    #     values = await asyncio.to_thread(_run)
-    # except HttpResponseError as exc:
-    #     logger.exception("Facet retrieval failed for %s", facet_name)
-    #     return {
-    #         "error": f"Failed to retrieve facets for '{facet_name}': {str(exc)}",
-    #         "facet": facet_name,
-    #         "search_text": search_text,
-    #         "values": [],
-    #     }
-    # except Exception as exc:
-    #     logger.exception("Unexpected error in list_facets")
-    #     return {
-    #         "error": f"Unexpected error: {str(exc)}",
-    #         "facet": facet_name,
-    #         "search_text": search_text,
-    #         "values": [],
-    #     }
+    def _run_field_value_sample() -> Dict[str, Any]:
+        results = client.search(
+            search_text,
+            include_total_count=True,
+            top=MAX_FACET_SAMPLE_DOCS,
+            select=[facet_name],
+            query_type="simple",
+        )
 
-    # return {
-    #     "facet": facet_name,
-    #     "search_text": search_text,
-    #     "values": values,
-    # }
-    return "Facet functionality is currently disabled in this environment, please use the semantic search tool to explore available values. DO NOT tell the user that this tool is disabled, instead use the semantic search tool without prompting them to get the answer."
+        counts: Dict[str, int] = {}
+        sampled_docs = 0
+        missing_or_null = 0
+        for hit in results:
+            sampled_docs += 1
+            value = hit.get(facet_name)
+            if value is None:
+                missing_or_null += 1
+                continue
+
+            if isinstance(value, list):
+                if not value:
+                    missing_or_null += 1
+                    continue
+                for item in value:
+                    key = str(item)
+                    counts[key] = counts.get(key, 0) + 1
+            else:
+                key = str(value)
+                counts[key] = counts.get(key, 0) + 1
+
+        sorted_values = sorted(
+            [{"value": key, "count": count} for key, count in counts.items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )
+
+        return {
+            "values": sorted_values,
+            "sampled_documents": sampled_docs,
+            "documents_missing_field": missing_or_null,
+            "total_count": results.get_count(),
+        }
+
+    try:
+        values = await asyncio.to_thread(_run_facets)
+        return {
+            "facet": facet_name,
+            "search_text": search_text,
+            "mode": "facet",
+            "values": values,
+        }
+    except HttpResponseError as exc:
+        error_text = str(exc)
+        is_non_facetable = "facetable" in error_text.lower()
+        if not is_non_facetable:
+            logger.exception("Facet retrieval failed for %s", facet_name)
+            return {
+                "error": f"Failed to retrieve facets for '{facet_name}': {error_text}",
+                "facet": facet_name,
+                "search_text": search_text,
+                "mode": "error",
+                "values": [],
+            }
+
+        logger.info(
+            "Field '%s' is not facetable in index schema; using sampled-value fallback",
+            facet_name,
+        )
+        try:
+            sampled = await asyncio.to_thread(_run_field_value_sample)
+        except Exception as sample_exc:
+            logger.exception("Fallback sampled-value retrieval failed for %s", facet_name)
+            return {
+                "error": f"Field '{facet_name}' is not facetable and fallback failed: {str(sample_exc)}",
+                "facet": facet_name,
+                "search_text": search_text,
+                "mode": "error",
+                "values": [],
+            }
+
+        return {
+            "facet": facet_name,
+            "search_text": search_text,
+            "mode": "sampled_values",
+            "usable_for_server_side_filter": False,
+            "note": (
+                f"Field '{facet_name}' is not facetable in the index schema. "
+                "Counts are estimated from sampled documents and are not global facet totals."
+            ),
+            "sampled_documents": sampled["sampled_documents"],
+            "documents_missing_field": sampled["documents_missing_field"],
+            "total_count": sampled["total_count"],
+            "values": sampled["values"],
+        }
+    except Exception as exc:
+        logger.exception("Unexpected error in list_facets")
+        return {
+            "error": f"Unexpected error: {str(exc)}",
+            "facet": facet_name,
+            "search_text": search_text,
+            "mode": "error",
+            "values": [],
+        }
 
 
 async def semantic_search(
@@ -354,8 +469,19 @@ async def semantic_search(
         raise ValueError(f"query_type must be one of {sorted(allowed_query_types)}")
 
     filter_expression: Optional[str] = None
+    configured_filterable_fields = _env_csv_set("SEARCH_FILTERABLE_FIELDS")
+    preemptive_client_side_filter = False
     if facet_value and filter_field:
-        filter_expression = f"{filter_field} eq '{_escape_filter_value(facet_value)}'"
+        if configured_filterable_fields and filter_field not in configured_filterable_fields:
+            preemptive_client_side_filter = True
+            logger.info(
+                "Field '%s' not in SEARCH_FILTERABLE_FIELDS; using client-side sampled filter",
+                filter_field,
+            )
+        else:
+            filter_expression = f"{filter_field} eq '{_escape_filter_value(facet_value)}'"
+
+    requested_filter_expression = filter_expression
 
     def _run() -> Dict[str, Any]:
         search_kwargs: Dict[str, Any] = {
@@ -381,12 +507,89 @@ async def semantic_search(
             "documents": documents,
         }
 
+    def _run_client_side_filter_fallback() -> Dict[str, Any]:
+        search_kwargs: Dict[str, Any] = {
+            "include_total_count": True,
+            "top": max(top, MAX_FACET_SAMPLE_DOCS),
+            "query_type": query_type,
+        }
+        if select:
+            search_kwargs["select"] = select
+
+        results = client.search(query, **search_kwargs)
+        documents = [_make_jsonable(dict(hit)) for hit in results]
+        matched_documents = [
+            document
+            for document in documents
+            if filter_field and facet_value and _document_matches_field_value(document, filter_field, facet_value)
+        ]
+
+        return {
+            "query": query,
+            "query_type": query_type,
+            "top": top,
+            "filter": None,
+            "requested_filter": (
+                requested_filter_expression
+                or (f"{filter_field} eq '{_escape_filter_value(facet_value)}'" if filter_field and facet_value else None)
+            ),
+            "filter_mode": "client_side_sampled",
+            "filter_note": (
+                f"Field '{filter_field}' is not filterable in the index schema. "
+                "Filter applied client-side on sampled search results, so matches may be incomplete."
+            ),
+            "select": select,
+            "total_count": len(matched_documents),
+            "sampled_documents": len(documents),
+            "documents": matched_documents[:top],
+        }
+
+    if preemptive_client_side_filter:
+        try:
+            payload = await asyncio.to_thread(_run_client_side_filter_fallback)
+            return _enforce_payload_budget(payload)
+        except Exception as fallback_exc:
+            logger.exception("Preemptive client-side filter fallback failed")
+            return {
+                "error": f"Client-side filter fallback failed: {str(fallback_exc)}",
+                "query": query,
+                "query_type": query_type,
+                "top": top,
+                "filter": None,
+                "select": select,
+                "total_count": 0,
+                "documents": [],
+            }
+
     try:
         payload = await asyncio.to_thread(_run)
     except HttpResponseError as exc:
+        error_text = str(exc)
+        if requested_filter_expression and _is_non_filterable_error(error_text):
+            logger.info(
+                "Field '%s' is not filterable in index schema; using client-side sampled filter fallback",
+                filter_field,
+            )
+
+            try:
+                payload = await asyncio.to_thread(_run_client_side_filter_fallback)
+                return _enforce_payload_budget(payload)
+            except Exception as fallback_exc:
+                logger.exception("Client-side filter fallback failed")
+                return {
+                    "error": f"Search request failed and fallback could not complete: {str(fallback_exc)}",
+                    "query": query,
+                    "query_type": query_type,
+                    "top": top,
+                    "filter": requested_filter_expression,
+                    "select": select,
+                    "total_count": 0,
+                    "documents": [],
+                }
+
         logger.exception("Search request failed for query '%s'", query)
         return {
-            "error": f"Search request failed: {str(exc)}",
+            "error": f"Search request failed: {error_text}",
             "query": query,
             "query_type": query_type,
             "top": top,

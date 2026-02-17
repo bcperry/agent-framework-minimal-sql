@@ -195,14 +195,9 @@ class AzureGovOAuthProvider(OAuthProvider):
         """Extract access token from the response."""
         json_response = await self.get_raw_token_response(code, url)
         token = json_response.get("access_token")
-        refresh_token = json_response.get("refresh_token")
 
         if not token:
             raise HTTPException(status_code=400, detail=ACCESS_TOKEN_MISSING)
-
-        # Store refresh token if available
-        if refresh_token:
-            self._refresh_token = refresh_token
 
         return token
 
@@ -239,7 +234,6 @@ class AzureGovOAuthProvider(OAuthProvider):
                 metadata={
                     "image": azure_user.get("image"),
                     "provider": "azure-gov",
-                    "refresh_token": getattr(self, "_refresh_token", None),
                 },
             )
             return (azure_user, user)
@@ -357,14 +351,9 @@ class AzureGovHybridOAuthProvider(OAuthProvider):
         """Extract access token from the response."""
         json_response = await self.get_raw_token_response(code, url)
         token = json_response.get("access_token")
-        refresh_token = json_response.get("refresh_token")
 
         if not token:
             raise HTTPException(status_code=400, detail=ACCESS_TOKEN_MISSING)
-
-        # Store refresh token if available
-        if refresh_token:
-            self._refresh_token = refresh_token
 
         return token
 
@@ -401,7 +390,6 @@ class AzureGovHybridOAuthProvider(OAuthProvider):
                 metadata={
                     "image": azure_user.get("image"),
                     "provider": "azure-gov-hybrid",
-                    "refresh_token": getattr(self, "_refresh_token", None),
                 },
             )
             return (azure_user, user)
