@@ -1,4 +1,5 @@
 import os
+import json
 import chainlit as cl
 import logging
 from typing import Dict, Optional, Tuple
@@ -6,7 +7,7 @@ from dotenv import load_dotenv
 from openai.lib.azure import AsyncAzureOpenAI
 from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import ChatAgent, AgentThread
-from agent_framework._types import UsageContent, UsageDetails
+from agent_framework._types import ChatMessage, UsageContent, UsageDetails
 from tools import SqlDatabase
 from rag_tools import semantic_search, list_facets
 from custom_oauth import AzureGovOAuthProvider, AzureGovHybridOAuthProvider
@@ -18,6 +19,12 @@ logger = logging.getLogger(__name__)
 
 AI_SEARCH_BOT_PROFILE = "Technical Maintenance AI"
 SQL_BOT_PROFILE = "Tactical Readiness AI"
+
+DEFAULT_MAX_THREAD_MESSAGES = int(os.getenv("MAX_THREAD_MESSAGES", "18"))
+DEFAULT_MAX_THREAD_CHARS = int(os.getenv("MAX_THREAD_CHARS", "48000"))
+DEFAULT_MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "12000"))
+DEFAULT_MAX_USER_INPUT_CHARS = int(os.getenv("MAX_USER_INPUT_CHARS", "8000"))
+MIN_THREAD_CONTEXT_CHARS = 4000
 
 # Track users who have agreed to disclaimer (persists across profile changes)
 # Key: user identifier, Value: True if agreed
@@ -149,6 +156,15 @@ async def on_chat_start():
     
     # Reset token usage counter for new chat session
     cl.user_session.set("token_usage", UsageDetails())
+    cl.user_session.set(
+        "context_usage",
+        {
+            "request_count": 0,
+            "sum_context_chars": 0,
+            "max_context_chars": 0,
+            "last_context_chars": 0,
+        },
+    )
     
     # Setup Semantic Kernel
     app_user = cl.user_session.get("user")
@@ -284,7 +300,9 @@ async def on_chat_start():
         db_tool.describe_table,
         db_tool.read_query,
     ]
-    search_tools = [semantic_search, list_facets]
+    # search_tools = [semantic_search, list_facets]
+    search_tools = [semantic_search]
+
 
     thread = agent.get_new_thread()
     logger.info("Created new thread for chat session")
@@ -302,18 +320,26 @@ async def on_chat_end():
     logger.info("Chat session ending, cleaning up resources")
     # Log final token usage for the session
     token_usage: Optional[UsageDetails] = cl.user_session.get("token_usage")
+    context_usage = cl.user_session.get("context_usage") or {}
     if token_usage:
         logger.info(
-            "Session token usage - Input: %s, Output: %s, Total: %s",
+            "Session token usage - Input: %s, Output: %s, Total: %s | "
+            "Context chars - Last: %s, Max: %s, Avg: %s",
             token_usage.input_token_count or 0,
             token_usage.output_token_count or 0,
             token_usage.total_token_count or 0,
+            context_usage.get("last_context_chars", 0),
+            context_usage.get("max_context_chars", 0),
+            int(
+                (context_usage.get("sum_context_chars", 0) / max(context_usage.get("request_count", 1), 1))
+            ),
         )
     # Clear thread and agents to ensure no state leaks to next session
     cl.user_session.set("thread", None)
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
     cl.user_session.set("token_usage", None)
+    cl.user_session.set("context_usage", None)
 
 
 def _is_retryable_error(e: Exception) -> bool:
@@ -329,6 +355,145 @@ def _is_retryable_error(e: Exception) -> bool:
         or "rate limit" in error_lower
         or "capacity" in error_lower
     )
+
+
+def _is_context_length_error(e: Exception) -> bool:
+    """Check if an error indicates the prompt/context is too large."""
+    error_text = str(e).lower()
+    return any(
+        phrase in error_text
+        for phrase in [
+            "context length",
+            "maximum context length",
+            "token limit",
+            "too many tokens",
+            "prompt is too long",
+            "maximum prompt",
+        ]
+    )
+
+
+def _estimate_message_chars(message: ChatMessage) -> int:
+    """Approximate message size in characters via serialized payload."""
+    try:
+        return len(json.dumps(message.to_dict(), ensure_ascii=False))
+    except Exception:
+        return len(str(message))
+
+
+def _estimate_thread_context_chars(thread: Optional[AgentThread]) -> int:
+    """Estimate total serialized size of thread messages in characters."""
+    if not thread or not thread.message_store or not hasattr(thread.message_store, "messages"):
+        return 0
+    messages = thread.message_store.messages or []
+    return sum(_estimate_message_chars(message) for message in messages)
+
+
+def _extract_tool_call_ids(message: ChatMessage) -> tuple[set[str], set[str]]:
+    """Return (function_call_ids, function_result_ids) present in a message."""
+    function_calls: set[str] = set()
+    function_results: set[str] = set()
+
+    contents = getattr(message, "contents", []) or []
+    for content in contents:
+        content_type = getattr(content, "type", None)
+        call_id = getattr(content, "call_id", None)
+        if not call_id:
+            continue
+        if content_type == "function_call":
+            function_calls.add(call_id)
+        elif content_type == "function_result":
+            function_results.add(call_id)
+
+    return function_calls, function_results
+
+
+def _is_message_tool_pair_consistent(message: ChatMessage, matched_call_ids: set[str]) -> bool:
+    """Check whether a message containing tool call/result content is pair-consistent."""
+    function_calls, function_results = _extract_tool_call_ids(message)
+    if function_calls and not (function_calls & matched_call_ids):
+        return False
+    if function_results and not (function_results & matched_call_ids):
+        return False
+    return True
+
+
+def _trim_user_input(user_input: str, max_chars: int = DEFAULT_MAX_USER_INPUT_CHARS) -> str:
+    """Trim oversized user input to reduce immediate prompt size."""
+    if len(user_input) <= max_chars:
+        return user_input
+    marker = "\n\n[Input truncated to fit model context window.]"
+    return user_input[: max_chars - len(marker)] + marker
+
+
+def _trim_thread_context(
+    thread: Optional[AgentThread],
+    reserve_for_input_chars: int = 0,
+    aggressive: bool = False,
+) -> None:
+    """Trim local thread history to a bounded rolling window.
+
+    Keeps newest messages first, while enforcing:
+    1) max message count
+    2) max per-message size (drops oversized historical messages)
+    3) total character budget
+    """
+    if not thread or not thread.message_store or not hasattr(thread.message_store, "messages"):
+        return
+
+    messages = list(thread.message_store.messages or [])
+    if not messages:
+        return
+
+    max_messages = 8 if aggressive else DEFAULT_MAX_THREAD_MESSAGES
+    max_message_chars = 6000 if aggressive else DEFAULT_MAX_MESSAGE_CHARS
+    configured_budget = 18000 if aggressive else DEFAULT_MAX_THREAD_CHARS
+    max_thread_chars = max(configured_budget - reserve_for_input_chars, MIN_THREAD_CONTEXT_CHARS)
+
+    # Keep only the newest messages by count first
+    messages = messages[-max_messages:]
+
+    # Drop oversized historical messages (commonly large tool outputs)
+    filtered_messages = [
+        message for message in messages if _estimate_message_chars(message) <= max_message_chars
+    ]
+    if filtered_messages:
+        messages = filtered_messages
+
+    # Enforce total thread character budget from newest to oldest
+    selected: list[ChatMessage] = []
+    running_chars = 0
+    for message in reversed(messages):
+        msg_chars = _estimate_message_chars(message)
+        if msg_chars > max_message_chars:
+            continue
+        if running_chars + msg_chars > max_thread_chars:
+            if selected:
+                break
+            continue
+        if msg_chars <= 0:
+            continue
+        selected.append(message)
+        running_chars += msg_chars
+
+    trimmed_messages = list(reversed(selected))
+
+    # Keep only matched function_call/function_result pairs to avoid invalid tool_call history.
+    all_function_calls: set[str] = set()
+    all_function_results: set[str] = set()
+    for message in trimmed_messages:
+        calls, results = _extract_tool_call_ids(message)
+        all_function_calls.update(calls)
+        all_function_results.update(results)
+
+    matched_call_ids = all_function_calls & all_function_results
+    pair_safe_messages = [
+        message
+        for message in trimmed_messages
+        if _is_message_tool_pair_consistent(message, matched_call_ids)
+    ]
+
+    thread.message_store.messages = pair_safe_messages
 
 
 async def _run_agent_stream(
@@ -433,15 +598,53 @@ async def on_message(message: cl.Message):
     answer: Optional[cl.Message] = None
     request_usage: Optional[UsageDetails] = None
     used_fallback = False
+    prepared_message = _trim_user_input(message.content)
+
+    # Proactively trim thread context before every model call
+    _trim_thread_context(thread, reserve_for_input_chars=len(prepared_message))
+    current_context_chars = _estimate_thread_context_chars(thread) + len(prepared_message)
+
+    context_usage = cl.user_session.get("context_usage") or {
+        "request_count": 0,
+        "sum_context_chars": 0,
+        "max_context_chars": 0,
+        "last_context_chars": 0,
+    }
+    context_usage["request_count"] = context_usage.get("request_count", 0) + 1
+    context_usage["sum_context_chars"] = context_usage.get("sum_context_chars", 0) + current_context_chars
+    context_usage["max_context_chars"] = max(context_usage.get("max_context_chars", 0), current_context_chars)
+    context_usage["last_context_chars"] = current_context_chars
+    cl.user_session.set("context_usage", context_usage)
 
     try:
         # Try primary agent first
         answer, request_usage = await _run_agent_stream(
-            agent, message.content, tools, thread, message.id
+            agent, prepared_message, tools, thread, message.id
         )
     except Exception as e:
+        # If context window is exceeded, trim aggressively and retry once
+        if _is_context_length_error(e):
+            logger.warning(
+                "Context length exceeded. Retrying with aggressively trimmed thread context."
+            )
+            _trim_thread_context(
+                thread,
+                reserve_for_input_chars=len(prepared_message),
+                aggressive=True,
+            )
+            try:
+                answer, request_usage = await _run_agent_stream(
+                    agent, prepared_message, tools, thread, message.id
+                )
+            except Exception as retry_error:
+                e = retry_error
+            else:
+                e = None
+
+        if e is None:
+            pass
         # Check if we should retry with secondary agent
-        if _is_retryable_error(e) and secondary_agent:
+        elif _is_retryable_error(e) and secondary_agent:
             logger.warning(
                 f"Primary LLM failed with retryable error: {e}. Retrying with secondary model..."
             )
@@ -497,13 +700,19 @@ async def on_message(message: cl.Message):
         # Log token usage for this request (not shown to user)
         logger.info(
             "Request token usage - Input: %s, Output: %s, Total: %s | "
-            "Session cumulative - Input: %s, Output: %s, Total: %s",
+            "Session cumulative - Input: %s, Output: %s, Total: %s | "
+            "Context chars - Current: %s, Max: %s, Avg: %s",
             request_usage.input_token_count or 0,
             request_usage.output_token_count or 0,
             request_usage.total_token_count or 0,
             session_usage.input_token_count or 0,
             session_usage.output_token_count or 0,
             session_usage.total_token_count or 0,
+            context_usage.get("last_context_chars", 0),
+            context_usage.get("max_context_chars", 0),
+            int(
+                (context_usage.get("sum_context_chars", 0) / max(context_usage.get("request_count", 1), 1))
+            ),
         )
 
     # Send the final message if not already sent

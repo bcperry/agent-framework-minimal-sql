@@ -1,4 +1,6 @@
 import logging
+import os
+import re
 import struct
 import sys
 
@@ -23,18 +25,53 @@ from azure.identity import DefaultAzureCredential, AzureCliCredential
 logger = logging.getLogger("tools")
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default=%s", name, raw, default)
+        return default
+
+
+MAX_QUERY_RESULT_ROWS = _env_int("MAX_QUERY_RESULT_ROWS", 100)
+MAX_QUERY_RESULT_CHARS = _env_int("MAX_QUERY_RESULT_CHARS", 12000)
+MAX_SQL_CELL_CHARS = _env_int("MAX_SQL_CELL_CHARS", 1200)
+
+
 def _get_token_struct(token: str) -> bytes:
     """Convert access token to the format required by pyodbc for SQL Server."""
     token_bytes = token.encode("utf-16-le")
     return struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
 
 
+def _truncate_text(value: str, max_chars: int, label: str) -> str:
+    if len(value) <= max_chars:
+        return value
+    omitted = len(value) - max_chars
+    return f"{value[:max_chars]}\n...[TRUNCATED {label}: omitted {omitted} chars]"
+
+
+def _sanitize_cell_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _truncate_text(value, MAX_SQL_CELL_CHARS, "SQL CELL")
+    return value
+
+
 class SqlDatabase:
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
         self._credential = None
+        self._last_query_truncated = False
         # self._init_credential()
         self.get_conn()
+
+    def _format_tool_output(self, payload: Any) -> str:
+        rendered = str(payload)
+        return _truncate_text(rendered, MAX_QUERY_RESULT_CHARS, "SQL RESULT")
 
     def _init_credential(self):
         """Initialize Azure credential for token-based auth if needed."""
@@ -70,10 +107,11 @@ class SqlDatabase:
             raise
 
     def _execute_query(
-        self, query: str, params: dict[str, Any] | None = None
+        self, query: str, params: Any | None = None
     ) -> list[dict[str, Any]]:
         """Execute a SQL query and return results as a list of dictionaries"""
         logger.debug(f"Executing query: {query}")
+        self._last_query_truncated = False
         try:
             with closing(self.get_conn()) as conn:
                 with closing(conn.cursor()) as cursor:
@@ -94,7 +132,14 @@ class SqlDatabase:
                         logger.debug(f"Write query affected {affected} rows")
                         return [{"affected_rows": affected}]
                     columns = [column[0] for column in cursor.description]
-                    results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                    rows = cursor.fetchmany(MAX_QUERY_RESULT_ROWS + 1)
+                    if len(rows) > MAX_QUERY_RESULT_ROWS:
+                        self._last_query_truncated = True
+                        rows = rows[:MAX_QUERY_RESULT_ROWS]
+                    results = [
+                        dict(zip(columns, (_sanitize_cell_value(cell) for cell in row)))
+                        for row in rows
+                    ]
                     logger.debug(f"Read query returned {len(results)} rows")
                     return results
         except Exception as e:
@@ -113,10 +158,10 @@ class SqlDatabase:
 
         query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
         results = self._execute_query(query)
-        return str(results)
+        return self._format_tool_output(results)
 
-    def list_views(self, schema_name: str = "dbo") -> str:
-        """List all views in the SQL database for a specific schema.
+    def list_views(self, schema_name: str = "ai") -> str:
+        """List all views in the SQL database for the ai schema only.
 
         *** STEP 1 - START HERE ***
         This is the PRIMARY entry point for discovering available data in the Azure SQL (T-SQL) database.
@@ -131,12 +176,16 @@ class SqlDatabase:
         then use read_query to query the view.
 
         Args:
-            schema_name: The schema to filter views by (default: 'dbo')
+            schema_name: Ignored. Views are always filtered to schema 'ai'.
         """
 
-        query = "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS"
+        query = (
+            "SELECT TABLE_SCHEMA, TABLE_NAME "
+            "FROM INFORMATION_SCHEMA.VIEWS "
+            "WHERE TABLE_SCHEMA = 'ai'"
+        )
         results = self._execute_query(query)
-        return str(results)
+        return self._format_tool_output(results)
 
     def describe_table(
         self, table_name: str = Field(description="The name of the table to describe")
@@ -189,12 +238,97 @@ class SqlDatabase:
         """
         foreign_keys = self._execute_query(fk_query)
 
-        result = f"Columns:\n{columns}\n\nPrimary Keys:\n{primary_keys}\n\nForeign Keys:\n{foreign_keys}"
+        result = (
+            "Columns:\n"
+            f"{self._format_tool_output(columns)}\n\n"
+            "Primary Keys:\n"
+            f"{self._format_tool_output(primary_keys)}\n\n"
+            "Foreign Keys:\n"
+            f"{self._format_tool_output(foreign_keys)}"
+        )
 
         if len(columns) == 0:
             return f"Table '{table_name}' not found or has no columns, ensure you are using the correct table name as defined in the list_tables tool."
 
         return result
+
+    def _extract_query_objects(self, query: str) -> list[tuple[str | None, str]]:
+        """Extract schema/table (or view) references from FROM/JOIN clauses."""
+        pattern = re.compile(r"\b(?:FROM|JOIN)\s+([^\s,;]+)", re.IGNORECASE)
+        references: list[tuple[str | None, str]] = []
+        seen: set[tuple[str | None, str]] = set()
+
+        for raw_token in pattern.findall(query):
+            token = raw_token.strip().rstrip(")")
+            if not token or token.startswith("("):
+                continue
+
+            token = token.split()[0]
+            token = token.replace("[", "").replace("]", "").replace('"', "")
+            if not token:
+                continue
+
+            parts = [part for part in token.split(".") if part]
+            if len(parts) >= 2:
+                schema_name, object_name = parts[-2], parts[-1]
+            else:
+                schema_name, object_name = None, parts[0]
+
+            ref = (schema_name, object_name)
+            if object_name and ref not in seen:
+                seen.add(ref)
+                references.append(ref)
+
+        return references
+
+    def _get_object_columns(self, schema_name: str | None, object_name: str) -> list[dict[str, Any]]:
+        """Get columns for a referenced table/view from INFORMATION_SCHEMA."""
+        if schema_name:
+            query = """
+                SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                ORDER BY ORDINAL_POSITION
+            """
+            return self._execute_query(query, (schema_name, object_name))
+
+        query = """
+            SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = ?
+            ORDER BY TABLE_SCHEMA, ORDINAL_POSITION
+        """
+        return self._execute_query(query, (object_name,))
+
+    def _build_schema_feedback_for_query(self, query: str) -> str:
+        """Build schema context for objects referenced in the failed SQL query."""
+        references = self._extract_query_objects(query)
+        if not references:
+            return "Could not infer table/view names from the query. Use list_views() and describe_table() first."
+
+        payload: list[dict[str, Any]] = []
+        for schema_name, object_name in references:
+            full_name = f"{schema_name}.{object_name}" if schema_name else object_name
+            try:
+                columns = self._get_object_columns(schema_name, object_name)
+            except Exception as schema_error:
+                payload.append(
+                    {
+                        "object": full_name,
+                        "error": f"Failed to load schema: {str(schema_error)}",
+                        "columns": [],
+                    }
+                )
+                continue
+
+            payload.append(
+                {
+                    "object": full_name,
+                    "columns": columns,
+                }
+            )
+
+        return self._format_tool_output(payload)
 
     def read_query(
         self, query: str = Field(description="T-SQL SELECT query to execute")
@@ -254,12 +388,28 @@ class SqlDatabase:
                     f"Keyword '{keyword}' is not allowed in read-only queries"
                 )
 
-        # Execute the query
-        results = self._execute_query(query)
+        try:
+            results = self._execute_query(query)
+        except Exception as e:
+            schema_feedback = self._build_schema_feedback_for_query(query)
+            return (
+                "Query failed to execute.\n"
+                f"Database error: {str(e)}\n\n"
+                "Schema for referenced objects:\n"
+                f"{schema_feedback}\n\n"
+                "Retry the query using only the table/view and column names shown above."
+            )
+
+        rendered_results = self._format_tool_output(results)
+        truncated_note = (
+            "\n\nNOTE: Query results were truncated to keep tool output within context limits."
+            if self._last_query_truncated
+            else ""
+        )
 
         if has_where or has_count or has_sum or has_avg or has_group_by:
             return (
-                f"Your results are: {str(results)}\n"
+                f"Your results are: {rendered_results}{truncated_note}\n"
                 "NOTE: You are attempting to filter or aggregate data"
                 "Although this query completed, please make sure you have:\n"
                 "1. Run SELECT DISTINCT queries on any columns you filter on\n"
@@ -269,7 +419,7 @@ class SqlDatabase:
                 "Do NOT proceed without checking distinct values first."
             )
         else:
-            return str(results)
+            return f"{rendered_results}{truncated_note}"
 
 
 # # from sqlite_db import SqliteDatabase

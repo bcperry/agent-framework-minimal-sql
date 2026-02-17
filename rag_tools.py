@@ -30,6 +30,69 @@ _DEFAULT_SELECT_FIELDS: List[str] = [
 ]
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default=%s", name, raw, default)
+        return default
+
+
+MAX_SEARCH_TOP = _env_int("MAX_SEARCH_TOP", 5)
+MAX_SEARCH_FIELD_CHARS = _env_int("MAX_SEARCH_FIELD_CHARS", 3000)
+MAX_SEARCH_PAYLOAD_CHARS = _env_int("MAX_SEARCH_PAYLOAD_CHARS", 15000)
+
+
+def _truncate_text(value: str, max_chars: int, label: str) -> str:
+    if len(value) <= max_chars:
+        return value
+    omitted = len(value) - max_chars
+    return f"{value[:max_chars]}\n...[TRUNCATED {label}: omitted {omitted} chars]"
+
+
+def _trim_document_fields(document: Dict[str, Any]) -> Dict[str, Any]:
+    trimmed: Dict[str, Any] = {}
+    for key, value in document.items():
+        if isinstance(value, str):
+            trimmed[key] = _truncate_text(value, MAX_SEARCH_FIELD_CHARS, f"SEARCH FIELD {key}")
+        else:
+            trimmed[key] = value
+    return trimmed
+
+
+def _enforce_payload_budget(payload: Dict[str, Any]) -> Dict[str, Any]:
+    documents = payload.get("documents", [])
+    if not isinstance(documents, list):
+        return payload
+
+    base_payload = dict(payload)
+    base_payload["documents"] = []
+    running_chars = len(str(base_payload))
+
+    selected_documents: List[Dict[str, Any]] = []
+    dropped = 0
+    for document in documents:
+        normalized_document = _trim_document_fields(document) if isinstance(document, dict) else document
+        doc_chars = len(str(normalized_document))
+        if selected_documents and running_chars + doc_chars > MAX_SEARCH_PAYLOAD_CHARS:
+            dropped += 1
+            continue
+        selected_documents.append(normalized_document)
+        running_chars += doc_chars
+
+    payload["documents"] = selected_documents
+    payload["returned_documents"] = len(selected_documents)
+    if dropped > 0:
+        payload["truncation_note"] = (
+            f"Dropped {dropped} document(s) to keep tool output within context limits."
+        )
+    return payload
+
+
 def _make_jsonable(value: Any) -> Any:
     """Convert Azure SDK values into JSON-serialisable primitives."""
 
@@ -146,51 +209,52 @@ async def list_facets(
     Raises:
         RuntimeError: If the search service is unreachable or the field is not facetable.
     """
-    try:
-        client = _get_search_client()
-    except Exception as e:
-        logger.exception("Failed to create SearchClient")
-        error_msg = f"Failed to create Search Client with error: {str(e)}"
-        return {
-            "error": error_msg,
-            "facet": facet_name,
-            "search_text": search_text,
-            "values": [],
-        }
+    # try:
+    #     client = _get_search_client()
+    # except Exception as e:
+    #     logger.exception("Failed to create SearchClient")
+    #     error_msg = f"Failed to create Search Client with error: {str(e)}"
+    #     return {
+    #         "error": error_msg,
+    #         "facet": facet_name,
+    #         "search_text": search_text,
+    #         "values": [],
+    #     }
 
-    def _run() -> List[Dict[str, Any]]:
-        results = client.search(
-            search_text,
-            facets=[facet_name],
-            top=0,
-        )
-        facets = results.get_facets().get(facet_name, [])
-        return [_make_jsonable(facet) for facet in facets]
+    # def _run() -> List[Dict[str, Any]]:
+    #     results = client.search(
+    #         search_text,
+    #         facets=[facet_name],
+    #         top=0,
+    #     )
+    #     facets = results.get_facets().get(facet_name, [])
+    #     return [_make_jsonable(facet) for facet in facets]
 
-    try:
-        values = await asyncio.to_thread(_run)
-    except HttpResponseError as exc:
-        logger.exception("Facet retrieval failed for %s", facet_name)
-        return {
-            "error": f"Failed to retrieve facets for '{facet_name}': {str(exc)}",
-            "facet": facet_name,
-            "search_text": search_text,
-            "values": [],
-        }
-    except Exception as exc:
-        logger.exception("Unexpected error in list_facets")
-        return {
-            "error": f"Unexpected error: {str(exc)}",
-            "facet": facet_name,
-            "search_text": search_text,
-            "values": [],
-        }
+    # try:
+    #     values = await asyncio.to_thread(_run)
+    # except HttpResponseError as exc:
+    #     logger.exception("Facet retrieval failed for %s", facet_name)
+    #     return {
+    #         "error": f"Failed to retrieve facets for '{facet_name}': {str(exc)}",
+    #         "facet": facet_name,
+    #         "search_text": search_text,
+    #         "values": [],
+    #     }
+    # except Exception as exc:
+    #     logger.exception("Unexpected error in list_facets")
+    #     return {
+    #         "error": f"Unexpected error: {str(exc)}",
+    #         "facet": facet_name,
+    #         "search_text": search_text,
+    #         "values": [],
+    #     }
 
-    return {
-        "facet": facet_name,
-        "search_text": search_text,
-        "values": values,
-    }
+    # return {
+    #     "facet": facet_name,
+    #     "search_text": search_text,
+    #     "values": values,
+    # }
+    return "Facet functionality is currently disabled in this environment, please use the semantic search tool to explore available values. DO NOT tell the user that this tool is disabled, instead use the semantic search tool without prompting them to get the answer."
 
 
 async def semantic_search(
@@ -264,6 +328,10 @@ async def semantic_search(
 
     if top <= 0:
         raise ValueError("top must be greater than zero")
+
+    if top > MAX_SEARCH_TOP:
+        logger.info("Requested top=%s exceeds max=%s; capping", top, MAX_SEARCH_TOP)
+        top = MAX_SEARCH_TOP
 
     try:
         client = _get_search_client()
@@ -340,4 +408,4 @@ async def semantic_search(
             "documents": [],
         }
 
-    return payload
+    return _enforce_payload_budget(payload)
