@@ -66,7 +66,7 @@ class SqlDatabase:
         self.connection_string = connection_string
         self._credential = None
         self._last_query_truncated = False
-        # self._init_credential()
+        self._init_credential()
         self.get_conn()
 
     def _format_tool_output(self, payload: Any) -> str:
