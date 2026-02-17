@@ -2,12 +2,12 @@ import os
 import json
 import chainlit as cl
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from dotenv import load_dotenv
 from openai.lib.azure import AsyncAzureOpenAI
 from agent_framework.azure import AzureOpenAIChatClient
-from agent_framework import ChatAgent, AgentThread
-from agent_framework._types import ChatMessage, UsageContent, UsageDetails
+from agent_framework import RawAgent, AgentSession, FunctionTool, tool
+from agent_framework._types import Message as ChatMessage, Content, UsageDetails
 from tools import SqlDatabase
 from rag_tools import semantic_search, list_facets
 from custom_oauth import AzureGovOAuthProvider, AzureGovHybridOAuthProvider
@@ -25,6 +25,98 @@ DEFAULT_MAX_THREAD_CHARS = int(os.getenv("MAX_THREAD_CHARS", "48000"))
 DEFAULT_MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "12000"))
 DEFAULT_MAX_USER_INPUT_CHARS = int(os.getenv("MAX_USER_INPUT_CHARS", "8000"))
 MIN_THREAD_CONTEXT_CHARS = 4000
+MAX_CONVERSATION_MESSAGES = int(os.getenv("MAX_CONVERSATION_MESSAGES", "24"))
+
+USAGE_INPUT_KEY = "input_token_count"
+USAGE_OUTPUT_KEY = "output_token_count"
+USAGE_TOTAL_KEY = "total_token_count"
+
+
+def _create_usage(
+    input_token_count: Optional[int] = None,
+    output_token_count: Optional[int] = None,
+    total_token_count: Optional[int] = None,
+) -> UsageDetails:
+    return UsageDetails(
+        input_token_count=input_token_count,
+        output_token_count=output_token_count,
+        total_token_count=total_token_count,
+    )
+
+
+def _usage_value(usage: Optional[UsageDetails], key: str) -> int:
+    if not usage:
+        return 0
+    if isinstance(usage, dict):
+        return int(usage.get(key) or 0)
+    return int(getattr(usage, key, 0) or 0)
+
+
+def _merge_usage(
+    current: Optional[UsageDetails],
+    incoming: Optional[UsageDetails],
+) -> Optional[UsageDetails]:
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+
+    return _create_usage(
+        input_token_count=_usage_value(current, USAGE_INPUT_KEY)
+        + _usage_value(incoming, USAGE_INPUT_KEY),
+        output_token_count=_usage_value(current, USAGE_OUTPUT_KEY)
+        + _usage_value(incoming, USAGE_OUTPUT_KEY),
+        total_token_count=_usage_value(current, USAGE_TOTAL_KEY)
+        + _usage_value(incoming, USAGE_TOTAL_KEY),
+    )
+
+
+def _extract_usage_from_payload(payload: Any) -> Optional[UsageDetails]:
+    if not payload:
+        return None
+
+    details = payload
+    if isinstance(payload, dict) and "usage_details" in payload:
+        details = payload.get("usage_details")
+
+    if not details:
+        return None
+
+    if isinstance(details, dict):
+        input_count = details.get(USAGE_INPUT_KEY)
+        output_count = details.get(USAGE_OUTPUT_KEY)
+        total_count = details.get(USAGE_TOTAL_KEY)
+    else:
+        input_count = getattr(details, USAGE_INPUT_KEY, None)
+        output_count = getattr(details, USAGE_OUTPUT_KEY, None)
+        total_count = getattr(details, USAGE_TOTAL_KEY, None)
+
+    if input_count is None and output_count is None and total_count is None:
+        return None
+
+    return _create_usage(
+        input_token_count=input_count,
+        output_token_count=output_count,
+        total_token_count=total_count,
+    )
+
+
+def _sanitize_endpoint(endpoint: str) -> str:
+    if endpoint.startswith("https://https://"):
+        return endpoint.replace("https://https://", "https://", 1)
+    return endpoint
+
+
+def _normalize_tools(raw_tools: list[Any]) -> list[Any]:
+    normalized: list[Any] = []
+    for raw_tool in raw_tools:
+        if isinstance(raw_tool, FunctionTool):
+            normalized.append(raw_tool)
+        elif callable(raw_tool):
+            normalized.append(tool(raw_tool))
+        else:
+            normalized.append(raw_tool)
+    return normalized
 
 # Track users who have agreed to disclaimer (persists across profile changes)
 # Key: user identifier, Value: True if agreed
@@ -151,11 +243,13 @@ async def on_chat_start():
     if old_thread:
         logger.info("Clearing existing thread from previous chat session")
     cl.user_session.set("thread", None)
+    cl.user_session.set("session", None)
+    cl.user_session.set("conversation_messages", [])
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
     
     # Reset token usage counter for new chat session
-    cl.user_session.set("token_usage", UsageDetails())
+    cl.user_session.set("token_usage", _create_usage())
     cl.user_session.set(
         "context_usage",
         {
@@ -196,6 +290,9 @@ async def on_chat_start():
     logger.info(
         "Initializing Azure OpenAI chat client (deployment=%s)", deployment_name
     )
+
+    endpoint = _sanitize_endpoint(endpoint)
+    secondary_endpoint = _sanitize_endpoint(secondary_endpoint)
 
     missing = [
         name
@@ -270,8 +367,8 @@ async def on_chat_start():
             timeout=120.0,
         )
 
-    agent = ChatAgent(
-        chat_client=llm,
+    agent = RawAgent(
+        client=llm,
         name="agent_name",
         instructions="You are a helpful assistant with database tools. Follow these rules strictly:\n\
 1. ALWAYS use your tools to answer questions - never rely on assumptions or general knowledge\n\
@@ -279,14 +376,13 @@ async def on_chat_start():
 3. Follow ALL step-by-step instructions in tool docstrings exactly - including STEP 3a before STEP 3b\n\
 4. If a tool says REQUIRED or DO NOT skip, you MUST comply with that instruction\n\
 5. Provide clear, concise responses based only on verified tool results",
-        temperature=0.1,
     )
 
     # Create secondary agent if fallback LLM is configured
-    secondary_agent: Optional[ChatAgent] = None
+    secondary_agent: Optional[RawAgent] = None
     if secondary_llm:
-        secondary_agent = ChatAgent(
-            chat_client=secondary_llm,
+        secondary_agent = RawAgent(
+            client=secondary_llm,
             name="agent_name_secondary",
             instructions="You are a helpful assistant with database tools. Follow these rules strictly:\n\
 1. ALWAYS use your tools to answer questions - never rely on assumptions or general knowledge\n\
@@ -294,7 +390,6 @@ async def on_chat_start():
 3. Follow ALL step-by-step instructions in tool docstrings exactly - including STEP 3a before STEP 3b\n\
 4. If a tool says REQUIRED or DO NOT skip, you MUST comply with that instruction\n\
 5. Provide clear, concise responses based only on verified tool results",
-            temperature=0.1,
         )
 
     db_tools = [
@@ -304,16 +399,17 @@ async def on_chat_start():
         db_tool.read_query,
     ]
     search_tools = [semantic_search, list_facets]
+    db_tools = _normalize_tools(db_tools)
+    search_tools = _normalize_tools(search_tools)
 
-
-    thread = agent.get_new_thread()
-    logger.info("Created new thread for chat session")
+    session = agent.create_session()
+    logger.info("Created new session for chat")
 
     cl.user_session.set("agent", agent)
     cl.user_session.set("secondary_agent", secondary_agent)
     cl.user_session.set("db_tools", db_tools)
     cl.user_session.set("ai_search", search_tools)
-    cl.user_session.set("thread", thread)
+    cl.user_session.set("session", session)
 
 
 @cl.on_chat_end
@@ -327,9 +423,9 @@ async def on_chat_end():
         logger.info(
             "Session token usage - Input: %s, Output: %s, Total: %s | "
             "Context chars - Last: %s, Max: %s, Avg: %s",
-            token_usage.input_token_count or 0,
-            token_usage.output_token_count or 0,
-            token_usage.total_token_count or 0,
+            _usage_value(token_usage, USAGE_INPUT_KEY),
+            _usage_value(token_usage, USAGE_OUTPUT_KEY),
+            _usage_value(token_usage, USAGE_TOTAL_KEY),
             context_usage.get("last_context_chars", 0),
             context_usage.get("max_context_chars", 0),
             int(
@@ -338,6 +434,7 @@ async def on_chat_end():
         )
     # Clear thread and agents to ensure no state leaks to next session
     cl.user_session.set("thread", None)
+    cl.user_session.set("session", None)
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
     cl.user_session.set("token_usage", None)
@@ -383,7 +480,7 @@ def _estimate_message_chars(message: ChatMessage) -> int:
         return len(str(message))
 
 
-def _estimate_thread_context_chars(thread: Optional[AgentThread]) -> int:
+def _estimate_thread_context_chars(thread: Optional[Any]) -> int:
     """Estimate total serialized size of thread messages in characters."""
     if not thread or not thread.message_store or not hasattr(thread.message_store, "messages"):
         return 0
@@ -429,7 +526,7 @@ def _trim_user_input(user_input: str, max_chars: int = DEFAULT_MAX_USER_INPUT_CH
 
 
 def _trim_thread_context(
-    thread: Optional[AgentThread],
+    thread: Optional[Any],
     reserve_for_input_chars: int = 0,
     aggressive: bool = False,
 ) -> None:
@@ -499,10 +596,11 @@ def _trim_thread_context(
 
 
 async def _run_agent_stream(
-    agent: ChatAgent,
+    agent: RawAgent,
     message_content: Optional[str],
     tools: list,
-    thread: AgentThread,
+    session: AgentSession,
+    conversation_messages: list[ChatMessage],
     parent_message_id: str,
 ) -> Tuple[Optional[cl.Message], Optional[UsageDetails]]:
     """Run agent stream and handle response rendering. Returns the answer message and usage or None.
@@ -521,57 +619,98 @@ async def _run_agent_stream(
     active_steps: dict = {}
     current_call_id: Optional[str] = None
     request_usage: Optional[UsageDetails] = None
+    final_text_parts: list[str] = []
 
-    async for msg in agent.run_stream(message_content, tools=tools, thread=thread):
+    if message_content:
+        current_user_message = ChatMessage(
+            role="user",
+            contents=[Content.from_text(message_content)],
+        )
+        run_messages = [*conversation_messages, current_user_message]
+    else:
+        current_user_message = None
+        run_messages = [*conversation_messages]
+
+    stream = agent.run(
+        messages=run_messages,
+        stream=True,
+        session=session,
+        tools=tools,
+    )
+
+    async for msg in stream:
         msg_dict = msg.to_dict()
-        if msg_dict.get("type") == "agent_run_response_update":
-            for content in msg_dict.get("contents", []):
-                content_type = content.get("type")
 
-                if content_type == "function_call":
-                    if answer:
-                        await answer.update()
-                        answer = None
+        update_usage = _extract_usage_from_payload(msg_dict)
+        request_usage = _merge_usage(request_usage, update_usage)
 
-                    call_id = content.get("call_id")
-                    name = content.get("name")
-                    arguments = content.get("arguments", "")
+        for content in msg_dict.get("contents", []) or []:
+            content_type = content.get("type")
 
-                    if name:
-                        step = cl.Step(name=name, type="tool", parent_id=parent_message_id)
-                        step.input = arguments
-                        if call_id:
-                            active_steps[call_id] = step
-                            current_call_id = call_id
-                        await step.send()
-                    else:
-                        target_id = call_id if call_id else current_call_id
-                        if target_id and target_id in active_steps:
-                            active_steps[target_id].input += arguments
-                            await active_steps[target_id].update()
+            if content_type == "function_call":
+                if answer:
+                    await answer.update()
+                    answer = None
 
-                elif content_type == "function_result":
-                    call_id = content.get("call_id")
-                    result = content.get("result")
-                    if call_id in active_steps:
-                        active_steps[call_id].output = result
-                        await active_steps[call_id].update()
-                        del active_steps[call_id]
+                call_id = content.get("call_id")
+                name = content.get("name")
+                arguments = content.get("arguments", "")
+                rendered_arguments = (
+                    json.dumps(arguments, ensure_ascii=False)
+                    if isinstance(arguments, (dict, list))
+                    else str(arguments)
+                )
 
-                elif content_type == "usage":
-                    # Extract token usage from the response
-                    details = content.get("details", {})
-                    usage = UsageDetails(
-                        input_token_count=details.get("input_token_count"),
-                        output_token_count=details.get("output_token_count"),
-                        total_token_count=details.get("total_token_count"),
-                    )
-                    request_usage = (request_usage + usage) if request_usage else usage
+                if name:
+                    step = cl.Step(name=name, type="tool", parent_id=parent_message_id)
+                    step.input = rendered_arguments
+                    if call_id:
+                        active_steps[call_id] = step
+                        current_call_id = call_id
+                    await step.send()
+                else:
+                    target_id = call_id if call_id else current_call_id
+                    if target_id and target_id in active_steps:
+                        active_steps[target_id].input += rendered_arguments
+                        await active_steps[target_id].update()
+
+            elif content_type == "function_result":
+                call_id = content.get("call_id")
+                result = content.get("result")
+                rendered_result = (
+                    json.dumps(result, ensure_ascii=False)
+                    if isinstance(result, (dict, list))
+                    else str(result)
+                )
+                if call_id in active_steps:
+                    active_steps[call_id].output = rendered_result
+                    await active_steps[call_id].update()
+                    del active_steps[call_id]
+
+            elif content_type == "usage":
+                usage = _extract_usage_from_payload(content)
+                request_usage = _merge_usage(request_usage, usage)
 
         if getattr(msg, "text", None):
+            final_text_parts.append(msg.text)
             if answer is None:
                 answer = cl.Message(content="")
             await answer.stream_token(msg.text)
+
+    if current_user_message is not None:
+        conversation_messages.append(current_user_message)
+
+    assistant_text = "".join(final_text_parts).strip()
+    if assistant_text:
+        conversation_messages.append(
+            ChatMessage(
+                role="assistant",
+                contents=[Content.from_text(assistant_text)],
+            )
+        )
+
+    if len(conversation_messages) > MAX_CONVERSATION_MESSAGES:
+        del conversation_messages[: len(conversation_messages) - MAX_CONVERSATION_MESSAGES]
 
     return answer, request_usage
 
@@ -580,21 +719,27 @@ async def _run_agent_stream(
 async def on_message(message: cl.Message):
     agent = cl.user_session.get("agent")
     secondary_agent = cl.user_session.get("secondary_agent")
-    tools = cl.user_session.get("tools")
-    thread = cl.user_session.get("thread")
+    session = cl.user_session.get("session")
+    conversation_messages = cl.user_session.get("conversation_messages") or []
+
+    if not agent or not session:
+        await cl.Message(
+            content="⚠️ Chat session is not initialized. Please refresh and start a new chat."
+        ).send()
+        return
 
     profile = cl.user_session.get("chat_profile")
 
     logging.info(f"Current chat profile: {profile if profile else 'None'}")
     if profile == AI_SEARCH_BOT_PROFILE:
-        tools = cl.user_session.get("ai_search")
+        tools = cl.user_session.get("ai_search") or []
 
     elif profile == SQL_BOT_PROFILE:
-        tools = cl.user_session.get("db_tools")
+        tools = cl.user_session.get("db_tools") or []
 
     else:
-        db_tools = cl.user_session.get("db_tools")
-        ai_search = cl.user_session.get("ai_search")
+        db_tools = cl.user_session.get("db_tools") or []
+        ai_search = cl.user_session.get("ai_search") or []
         tools = db_tools + ai_search
 
     answer: Optional[cl.Message] = None
@@ -602,9 +747,7 @@ async def on_message(message: cl.Message):
     used_fallback = False
     prepared_message = _trim_user_input(message.content)
 
-    # Proactively trim thread context before every model call
-    _trim_thread_context(thread, reserve_for_input_chars=len(prepared_message))
-    current_context_chars = _estimate_thread_context_chars(thread) + len(prepared_message)
+    current_context_chars = len(prepared_message)
 
     context_usage = cl.user_session.get("context_usage") or {
         "request_count": 0,
@@ -621,30 +764,15 @@ async def on_message(message: cl.Message):
     try:
         # Try primary agent first
         answer, request_usage = await _run_agent_stream(
-            agent, prepared_message, tools, thread, message.id
+            agent, prepared_message, tools, session, conversation_messages, message.id
         )
     except Exception as e:
-        # If context window is exceeded, trim aggressively and retry once
         if _is_context_length_error(e):
-            logger.warning(
-                "Context length exceeded. Retrying with aggressively trimmed thread context."
-            )
-            _trim_thread_context(
-                thread,
-                reserve_for_input_chars=len(prepared_message),
-                aggressive=True,
-            )
-            try:
-                answer, request_usage = await _run_agent_stream(
-                    agent, prepared_message, tools, thread, message.id
-                )
-            except Exception as retry_error:
-                e = retry_error
-            else:
-                e = None
-
-        if e is None:
-            pass
+            logger.error("Context length exceeded with current session: %s", e)
+            await cl.Message(
+                content="⚠️ The request exceeded model context limits. Please shorten your prompt or start a new chat."
+            ).send()
+            return
         # Check if we should retry with secondary agent
         elif _is_retryable_error(e) and secondary_agent:
             logger.warning(
@@ -656,11 +784,8 @@ async def on_message(message: cl.Message):
             ).send()
 
             try:
-                # Reuse the existing thread to preserve any tool calls and results
-                # from the primary agent's partial execution. Pass None for message
-                # since it's already in the thread context.
                 answer, request_usage = await _run_agent_stream(
-                    secondary_agent, None, tools, thread, message.id
+                    secondary_agent, prepared_message, tools, session, conversation_messages, message.id
                 )
                 used_fallback = True
                 logger.info("Successfully processed request using secondary model with preserved context")
@@ -671,7 +796,7 @@ async def on_message(message: cl.Message):
                 await cl.Message(
                     content="❌ Both primary and backup AI models are unavailable. Please try again later."
                 ).send()
-                cl.user_session.set("thread", thread)
+                cl.user_session.set("session", session)
                 return
         elif _is_retryable_error(e):
             # Rate limit but no secondary agent configured
@@ -679,7 +804,7 @@ async def on_message(message: cl.Message):
             await cl.Message(
                 content="⚠️ The AI service is currently experiencing high demand (rate limit exceeded). Please try again in a moment."
             ).send()
-            cl.user_session.set("thread", thread)
+            cl.user_session.set("session", session)
             return
         else:
             # Non-retryable error
@@ -687,16 +812,13 @@ async def on_message(message: cl.Message):
             await cl.Message(
                 content=f"❌ An error occurred while processing your request: {str(e)}"
             ).send()
-            cl.user_session.set("thread", thread)
+            cl.user_session.set("session", session)
             return
 
     # Update cumulative token usage for the session
     if request_usage:
         session_usage: Optional[UsageDetails] = cl.user_session.get("token_usage")
-        if session_usage:
-            session_usage += request_usage
-        else:
-            session_usage = request_usage
+        session_usage = _merge_usage(session_usage, request_usage)
         cl.user_session.set("token_usage", session_usage)
         
         # Log token usage for this request (not shown to user)
@@ -704,12 +826,12 @@ async def on_message(message: cl.Message):
             "Request token usage - Input: %s, Output: %s, Total: %s | "
             "Session cumulative - Input: %s, Output: %s, Total: %s | "
             "Context chars - Current: %s, Max: %s, Avg: %s",
-            request_usage.input_token_count or 0,
-            request_usage.output_token_count or 0,
-            request_usage.total_token_count or 0,
-            session_usage.input_token_count or 0,
-            session_usage.output_token_count or 0,
-            session_usage.total_token_count or 0,
+            _usage_value(request_usage, USAGE_INPUT_KEY),
+            _usage_value(request_usage, USAGE_OUTPUT_KEY),
+            _usage_value(request_usage, USAGE_TOTAL_KEY),
+            _usage_value(session_usage, USAGE_INPUT_KEY),
+            _usage_value(session_usage, USAGE_OUTPUT_KEY),
+            _usage_value(session_usage, USAGE_TOTAL_KEY),
             context_usage.get("last_context_chars", 0),
             context_usage.get("max_context_chars", 0),
             int(
@@ -723,4 +845,5 @@ async def on_message(message: cl.Message):
             answer.content += "\n\n_Response generated using backup model._"
         await answer.send()
 
-    cl.user_session.set("thread", thread)
+    cl.user_session.set("session", session)
+    cl.user_session.set("conversation_messages", conversation_messages)

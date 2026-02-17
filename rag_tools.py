@@ -46,13 +46,14 @@ MAX_SEARCH_TOP = _env_int("MAX_SEARCH_TOP", 5)
 MAX_SEARCH_FIELD_CHARS = _env_int("MAX_SEARCH_FIELD_CHARS", 3000)
 MAX_SEARCH_PAYLOAD_CHARS = _env_int("MAX_SEARCH_PAYLOAD_CHARS", 15000)
 MAX_FACET_SAMPLE_DOCS = _env_int("MAX_FACET_SAMPLE_DOCS", 100)
+DEFAULT_SEARCH_FILTERABLE_FIELDS = {"text_document_id", "image_document_id"}
 
 
-def _env_csv_set(name: str) -> set[str]:
+def _env_csv_set(name: str, default: Optional[set[str]] = None) -> set[str]:
     raw = os.getenv(name, "")
     if not raw:
-        return set()
-    return {item.strip() for item in raw.split(",") if item.strip()}
+        return {item.lower() for item in (default or set())}
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
 def _truncate_text(value: str, max_chars: int, label: str) -> str:
@@ -469,10 +470,14 @@ async def semantic_search(
         raise ValueError(f"query_type must be one of {sorted(allowed_query_types)}")
 
     filter_expression: Optional[str] = None
-    configured_filterable_fields = _env_csv_set("SEARCH_FILTERABLE_FIELDS")
+    configured_filterable_fields = _env_csv_set(
+        "SEARCH_FILTERABLE_FIELDS",
+        default=DEFAULT_SEARCH_FILTERABLE_FIELDS,
+    )
     preemptive_client_side_filter = False
     if facet_value and filter_field:
-        if configured_filterable_fields and filter_field not in configured_filterable_fields:
+        normalized_filter_field = filter_field.lower()
+        if configured_filterable_fields and normalized_filter_field not in configured_filterable_fields:
             preemptive_client_side_filter = True
             logger.info(
                 "Field '%s' not in SEARCH_FILTERABLE_FIELDS; using client-side sampled filter",

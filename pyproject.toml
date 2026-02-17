@@ -5,7 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agent-framework>=1.0.0b251114",
+    "agent-framework==1.0.0b260212",
+    "agent-framework-a2a==1.0.0b260212",
+    "agent-framework-core==1.0.0b260212",
     "azure-ai-agents>=1.2.0b5",
     "azure-search-documents>=11.6.0",
     "chainlit>=2.9.2",
@@ -19,3 +21,6 @@ dev = [
     "pre-commit>=4.4.0",
     "pytest>=9.0.2",
 ]
+
+[tool.uv]
+prerelease = "allow"
