@@ -215,164 +215,6 @@ def _get_search_client(index_name: Optional[str] = None) -> SearchClient:
     )
 
 
-async def list_facets(
-    facet_name: str,
-    search_text: str = "*",
-) -> Dict[str, Any]:
-    """Retrieve faceted navigation values from the Azure AI Search index.
-
-    This tool returns aggregated counts of distinct values for a specified field in the search index,
-    commonly used to build filters or understand the distribution of values across documents.
-
-    Args:
-        facet_name: The name of the field to facet on (e.g., "category", "author", "source").
-                   Must be a facetable field in your search index schema.
-        search_text: Optional search query to scope the facet results. Use "*" (default) to
-                    retrieve facets across all documents, or provide a query string to only
-                    facet within matching documents.
-
-    Returns:
-        A dictionary containing:
-        - facet: The name of the field that was faceted
-        - search_text: The query used to scope results
-        - values: List of facet value objects, each containing:
-          - value: The distinct field value
-          - count: Number of documents with this value
-
-    Example use cases:
-        - List all unique document titles: list_facets(facet_name="document_title")
-        - Get document IDs: list_facets(facet_name="text_document_id")
-        - Find titles in security-related docs: list_facets(facet_name="document_title", search_text="security")
-
-    Raises:
-        RuntimeError: If the search service is unreachable or the field is not facetable.
-    """
-    try:
-        client = _get_search_client()
-    except Exception as exc:
-        logger.exception("Failed to create SearchClient")
-        return {
-            "error": f"Failed to create Search Client with error: {str(exc)}",
-            "facet": facet_name,
-            "search_text": search_text,
-            "mode": "error",
-            "values": [],
-        }
-
-    def _run_facets() -> List[Dict[str, Any]]:
-        results = client.search(
-            search_text,
-            facets=[facet_name],
-            top=0,
-        )
-        facets = results.get_facets().get(facet_name, [])
-        return [_make_jsonable(facet) for facet in facets]
-
-    def _run_field_value_sample() -> Dict[str, Any]:
-        results = client.search(
-            search_text,
-            include_total_count=True,
-            top=MAX_FACET_SAMPLE_DOCS,
-            select=[facet_name],
-            query_type="simple",
-        )
-
-        counts: Dict[str, int] = {}
-        sampled_docs = 0
-        missing_or_null = 0
-        for hit in results:
-            sampled_docs += 1
-            value = hit.get(facet_name)
-            if value is None:
-                missing_or_null += 1
-                continue
-
-            if isinstance(value, list):
-                if not value:
-                    missing_or_null += 1
-                    continue
-                for item in value:
-                    key = str(item)
-                    counts[key] = counts.get(key, 0) + 1
-            else:
-                key = str(value)
-                counts[key] = counts.get(key, 0) + 1
-
-        sorted_values = sorted(
-            [{"value": key, "count": count} for key, count in counts.items()],
-            key=lambda item: item["count"],
-            reverse=True,
-        )
-
-        return {
-            "values": sorted_values,
-            "sampled_documents": sampled_docs,
-            "documents_missing_field": missing_or_null,
-            "total_count": results.get_count(),
-        }
-
-    try:
-        values = await asyncio.to_thread(_run_facets)
-        return {
-            "facet": facet_name,
-            "search_text": search_text,
-            "mode": "facet",
-            "values": values,
-        }
-    except HttpResponseError as exc:
-        error_text = str(exc)
-        is_non_facetable = "facetable" in error_text.lower()
-        if not is_non_facetable:
-            logger.exception("Facet retrieval failed for %s", facet_name)
-            return {
-                "error": f"Failed to retrieve facets for '{facet_name}': {error_text}",
-                "facet": facet_name,
-                "search_text": search_text,
-                "mode": "error",
-                "values": [],
-            }
-
-        logger.info(
-            "Field '%s' is not facetable in index schema; using sampled-value fallback",
-            facet_name,
-        )
-        try:
-            sampled = await asyncio.to_thread(_run_field_value_sample)
-        except Exception as sample_exc:
-            logger.exception("Fallback sampled-value retrieval failed for %s", facet_name)
-            return {
-                "error": f"Field '{facet_name}' is not facetable and fallback failed: {str(sample_exc)}",
-                "facet": facet_name,
-                "search_text": search_text,
-                "mode": "error",
-                "values": [],
-            }
-
-        return {
-            "facet": facet_name,
-            "search_text": search_text,
-            "mode": "sampled_values",
-            "usable_for_server_side_filter": False,
-            "note": (
-                f"Field '{facet_name}' is not facetable in the index schema. "
-                "Counts are estimated from sampled documents and are not global facet totals."
-            ),
-            "sampled_documents": sampled["sampled_documents"],
-            "documents_missing_field": sampled["documents_missing_field"],
-            "total_count": sampled["total_count"],
-            "values": sampled["values"],
-        }
-    except Exception as exc:
-        logger.exception("Unexpected error in list_facets")
-        return {
-            "error": f"Unexpected error: {str(exc)}",
-            "facet": facet_name,
-            "search_text": search_text,
-            "mode": "error",
-            "values": [],
-        }
-
-
 async def semantic_search(
     query: str,
     top: int = 3,
@@ -549,6 +391,34 @@ async def semantic_search(
             "documents": matched_documents[:top],
         }
 
+    def _run_unfiltered_basic_fallback(reason: str) -> Dict[str, Any]:
+        search_kwargs: Dict[str, Any] = {
+            "include_total_count": True,
+            "top": top,
+            "query_type": "simple",
+        }
+        if select:
+            search_kwargs["select"] = select
+
+        results = client.search(query, **search_kwargs)
+        documents = [_make_jsonable(dict(hit)) for hit in results]
+        total = results.get_count()
+        return {
+            "query": query,
+            "query_type": "simple",
+            "top": top,
+            "filter": None,
+            "select": select,
+            "total_count": total,
+            "documents": documents,
+            "fallback_executed": "simple_unfiltered",
+            "fallback_reason": reason,
+            "model_guidance": (
+                "Semantic search returned no results. Use this unfiltered basic search result set; "
+                "if still empty, answer that no matching content was found and ask the user to broaden the query."
+            ),
+        }
+
     if preemptive_client_side_filter:
         try:
             payload = await asyncio.to_thread(_run_client_side_filter_fallback)
@@ -615,5 +485,20 @@ async def semantic_search(
             "total_count": 0,
             "documents": [],
         }
+
+    has_no_documents = not payload.get("documents")
+    if query_type == "semantic" and has_no_documents:
+        try:
+            fallback_payload = await asyncio.to_thread(
+                _run_unfiltered_basic_fallback,
+                "semantic_search_returned_no_documents",
+            )
+            return _enforce_payload_budget(fallback_payload)
+        except Exception as fallback_exc:
+            logger.exception("Unfiltered basic fallback failed after empty semantic results")
+            payload["model_guidance"] = (
+                "Semantic search returned no results. Retry with query_type='simple' and no filters. "
+                f"Automatic fallback failed: {str(fallback_exc)}"
+            )
 
     return _enforce_payload_budget(payload)

@@ -9,7 +9,7 @@ from agent_framework.azure import AzureOpenAIChatClient
 from agent_framework import RawAgent, AgentSession, FunctionTool, tool
 from agent_framework._types import Message as ChatMessage, Content, UsageDetails
 from tools import SqlDatabase
-from rag_tools import semantic_search, list_facets
+from rag_tools import semantic_search
 from custom_oauth import AzureGovOAuthProvider, AzureGovHybridOAuthProvider
 
 load_dotenv()
@@ -398,7 +398,7 @@ async def on_chat_start():
         db_tool.describe_table,
         db_tool.read_query,
     ]
-    search_tools = [semantic_search, list_facets]
+    search_tools = [semantic_search]
     db_tools = _normalize_tools(db_tools)
     search_tools = _normalize_tools(search_tools)
 
