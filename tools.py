@@ -66,12 +66,39 @@ class SqlDatabase:
         self.connection_string = connection_string
         self._credential = None
         self._last_query_truncated = False
-        self._init_credential()
+        self._last_output_truncated = False
+        # self._init_credential()
         self.get_conn()
 
     def _format_tool_output(self, payload: Any) -> str:
         rendered = str(payload)
+        self._last_output_truncated = len(rendered) > MAX_QUERY_RESULT_CHARS
         return _truncate_text(rendered, MAX_QUERY_RESULT_CHARS, "SQL RESULT")
+
+    def _is_distinct_query(self, normalized_query: str) -> bool:
+        return "SELECT DISTINCT" in normalized_query
+
+    def _build_truncation_guidance(self, query: str, normalized_query: str) -> str:
+        base_guidance = (
+            "NOTE: Results are partial due to truncation limits. Do not conclude a value is missing from the database based on this response alone. "
+            "Run additional SELECT queries to continue coverage until no new rows/values are returned."
+        )
+
+        if self._is_distinct_query(normalized_query):
+            return (
+                f"{base_guidance}\n"
+                "For DISTINCT discovery, page the value space in multiple queries and merge findings before concluding presence/absence.\n"
+                "Example paging pattern (replace placeholders):\n"
+                "SELECT DISTINCT <column> FROM <schema.view_or_table> "
+                "ORDER BY <column> OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY;\n"
+                "Then increment OFFSET (100, 200, 300, ...) until a page returns no new values."
+            )
+
+        return (
+            f"{base_guidance}\n"
+            "If this response is used for filtering or existence checks, re-query in smaller pages "
+            "(e.g., ORDER BY + OFFSET/FETCH) and consolidate all pages first."
+        )
 
     def _init_credential(self):
         """Initialize Azure credential for token-based auth if needed."""
@@ -112,6 +139,7 @@ class SqlDatabase:
         """Execute a SQL query and return results as a list of dictionaries"""
         logger.debug(f"Executing query: {query}")
         self._last_query_truncated = False
+        self._last_output_truncated = False
         try:
             with closing(self.get_conn()) as conn:
                 with closing(conn.cursor()) as cursor:
@@ -167,6 +195,13 @@ class SqlDatabase:
         This is the PRIMARY entry point for discovering available data in the Azure SQL (T-SQL) database.
         ALWAYS use this tool FIRST before describe_table or read_query to understand what views exist.
 
+                Readiness routing guidance:
+                - If user asks for operational readiness of a UIC, prioritize views that provide unit-level rollups
+                    across all LINs.
+                - If user asks about a specific LIN for a UIC, prioritize LIN-level/detail views.
+                - If user asks about a UIC without readiness details, find unit information views first.
+                - Always identify a timeframe view/column path before final query execution.
+
         Views are the preferred way to access data in this database. They provide:
         - Pre-defined, optimized queries
         - Consistent data access patterns
@@ -195,6 +230,12 @@ class SqlDatabase:
         STEP 2: After using list_tables, you MUST use this to get column names, data types, max lengths,
         nullability, primary keys, and foreign keys for a specific table in the Azure SQL (T-SQL) database.
         This information is essential before executing read_query or write_query. This does not require the database schema name.
+
+                Readiness-specific usage:
+                - Use this immediately after list_views to confirm where unit rollups, LIN details, and time references exist.
+                - For UIC operational readiness, verify the selected object supports whole-unit aggregation and does not
+                    limit to a single LIN unless requested.
+                - For unit specific LIN questions, verify the selected object includes both UIC and LIN so results are unit-specific. if required.
         """
         if table_name is None:
             raise ValueError("Missing table_name argument")
@@ -335,6 +376,12 @@ class SqlDatabase:
     ) -> str:
         """Execute a SELECT query on the SQL database.
 
+        Readiness query intent rules (apply before execution):
+        - User asks "What is the operational readiness of UIC ...": execute a unit-level rollup across all LINs.
+        - User asks "What can you tell me about LIN ... for UIC ...": execute a LIN-level query scoped to that UIC.
+        - User asks "Tell me about <UIC>": retrieve UIC context and latest readiness-relevant data first.
+        - If timeframe is provided, apply it. If not provided, use latest available period and state that clearly.
+
         REQUIRED WORKFLOW:
         STEP 3a: First, query distinct values for any columns you plan to filter on.
                  Example: SELECT DISTINCT status FROM schema.orders
@@ -343,6 +390,12 @@ class SqlDatabase:
 
         STEP 3b: After verifying actual values exist, construct your filtered query.
                  Use ONLY the exact values you found in step 3a for WHERE clauses.
+
+        Truncation handling (required):
+        - Tool output can be truncated by row, cell, or payload limits.
+        - If truncation occurs, treat the response as partial.
+        - Never conclude "value does not exist" from a truncated DISTINCT result.
+        - Continue with additional paged SELECT queries until coverage is complete.
 
         DO NOT skip step 3a. DO NOT assume what values exist. DO NOT filter without first checking.
         Executes T-SQL SELECT statements on the Azure SQL database.
@@ -401,15 +454,24 @@ class SqlDatabase:
             )
 
         rendered_results = self._format_tool_output(results)
-        truncated_note = (
-            "\n\nNOTE: Query results were truncated to keep tool output within context limits."
-            if self._last_query_truncated
+        has_marker_truncation = (
+            "[TRUNCATED SQL RESULT" in rendered_results
+            or "[TRUNCATED SQL CELL" in rendered_results
+        )
+        is_truncated = (
+            self._last_query_truncated
+            or self._last_output_truncated
+            or has_marker_truncation
+        )
+        truncation_note = (
+            f"\n\n{self._build_truncation_guidance(query, normalized_query)}"
+            if is_truncated
             else ""
         )
 
         if has_where or has_count or has_sum or has_avg or has_group_by:
             return (
-                f"Your results are: {rendered_results}{truncated_note}\n"
+                f"Your results are: {rendered_results}{truncation_note}\n"
                 "NOTE: You are attempting to filter or aggregate data"
                 "Although this query completed, please make sure you have:\n"
                 "1. Run SELECT DISTINCT queries on any columns you filter on\n"
@@ -419,7 +481,7 @@ class SqlDatabase:
                 "Do NOT proceed without checking distinct values first."
             )
         else:
-            return f"{rendered_results}{truncated_note}"
+            return f"{rendered_results}{truncation_note}"
 
 
 # # from sqlite_db import SqliteDatabase

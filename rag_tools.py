@@ -279,6 +279,20 @@ async def semantic_search(
         - Request only necessary fields via select_fields to minimize latency
         - Check total_count to understand if you're seeing all relevant results
 
+        Army maintenance-document usage guidance:
+                - Use this tool for technical publication content (TM, LO, TB, SB, MWO, SC) and maintenance procedures.
+                - If a user provides a publication identifier (example: TM 9-2320-280-10), search using the exact number
+                    and then broaden with related terms only if results are empty.
+                - Interpret TM suffixes for maintenance scope when explaining findings:
+                    - -10 operator level
+                    - -20/-30 field level (combined category)
+                    - -40/-50 sustainment level
+                    - &P parts manual, -HR hand receipt
+                - Prefer answers grounded in retrieved excerpts; if no relevant document is returned, explicitly state
+                    that no supporting publication text was found.
+                - For procedural questions, prioritize warnings/cautions, initial setup conditions, and follow-on tasks
+                    when present in retrieved content.
+
     Raises:
         ValueError: If top <= 0 or query_type is invalid
         RuntimeError: If the search request fails or the service is unreachable

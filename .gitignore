@@ -33,3 +33,5 @@ terraform.rc
 .pytest_cache/
 # Certificates
 certs/
+.env.appsettings.json
+.azure/config
