@@ -196,6 +196,14 @@ uv run pre-commit install
 uv run pre-commit run --all-files
 ```
 
+## Evaluation
+
+Foundry evaluation scaffold is available under `eval/foundry/`.
+
+```powershell
+uv run python eval/foundry/run_eval.py --config eval/foundry/config.yaml
+```
+
 ## Troubleshooting
 
 - **Import errors**: Run `uv sync` or `pip install -r requirements.txt`

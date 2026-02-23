@@ -35,3 +35,5 @@ terraform.rc
 certs/
 .env.appsettings.json
 .azure/config
+eval/traces/
+eval/results/

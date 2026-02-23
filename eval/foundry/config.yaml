@@ -1,0 +1,30 @@
+schema_version: 1
+name: sql-agent-foundry-eval
+
+paths:
+  traces_jsonl: eval/traces/agent_runs.jsonl
+  gold_jsonl: eval/datasets/sql_agent_gold_starter.jsonl
+  tool_config_yaml: config/prompts/tools.yaml
+  output_json: eval/results/foundry_eval_latest.json
+  portal_input_jsonl: eval/results/foundry_portal_input.jsonl
+  portal_output_json: eval/results/foundry_portal_eval.json
+
+matching:
+  query_match: exact_case_insensitive
+  skip_unmatched_traces: true
+
+metrics:
+  expected_sequence_mode: ordered_subsequence
+  include_deterministic_metrics: true
+  include_ai_judge_metrics: true
+  log_to_foundry_portal: true
+
+azure:
+  project_endpoint_env: AZURE_AI_PROJECT_ENDPOINT
+  project_connection_string_env: AZURE_AI_PROJECT_CONNECTION_STRING
+  model:
+    endpoint_env: AZURE_OPENAI_ENDPOINT
+    key_env: AZURE_OPENAI_API_KEY
+    api_version_env: AZURE_OPENAI_API_VERSION
+    deployment_env: AZURE_OPENAI_EVAL_DEPLOYMENT
+    deployment_fallback_env: AZURE_OPENAI_MODEL
