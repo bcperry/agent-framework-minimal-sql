@@ -60,7 +60,21 @@ OAUTH_AZURE_GOV_AD_TENANT_ID=your-tenant-id
 
 # Chainlit
 CHAINLIT_AUTH_SECRET=your-auth-secret
+
+# Prompt configuration (required)
+# PROMPT_ENV=local            # local|staging|prod
+
+# Evaluation trace logging (optional)
+# ENABLE_EVAL_TRACE_LOGGING=false
+# EVAL_TRACE_OUTPUT_PATH=eval/traces/agent_runs.jsonl
 ```
+
+Prompt configs are located under `config/prompts/` and include system prompts, tool descriptions,
+evaluation templates, and environment overlays.
+
+Tool description source of truth: maintain tool descriptions in `config/prompts/tools.yaml`.
+Function docstrings in `tools.py` and `rag_tools.py` should only reference that YAML location
+to avoid drift between runtime tool metadata and code comments.
 
 ## Usage
 

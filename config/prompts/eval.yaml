@@ -1,0 +1,35 @@
+schema_version: 1
+description: Evaluation-time prompt templates and rubric thresholds.
+
+eval_templates:
+  tool_call_expected_template:
+    id: tool_call_expected_v1
+    version: 1.0.0
+    text: |
+      Determine whether the agent chose the correct tool set for the request.
+      Consider both required and forbidden tools.
+
+  tool_sequence_template:
+    id: tool_sequence_v1
+    version: 1.0.0
+    text: |
+      For SQL discovery tasks, expected trajectory is usually:
+      list_views -> describe_table -> read_query.
+      Penalize direct read_query when schema/columns are unknown.
+
+  failure_reason_template:
+    id: failure_reason_v1
+    version: 1.0.0
+    text: |
+      If score is below threshold, explain:
+      - which expected tool call(s) were missing,
+      - which incorrect tool call(s) were made,
+      - whether ordering/trajectory was inappropriate.
+
+rubric:
+  thresholds:
+    tool_call_accuracy: 4
+    intent_resolution: 4
+    task_adherence: 4
+    response_completeness: 4
+  scoring_scale: 1_to_5

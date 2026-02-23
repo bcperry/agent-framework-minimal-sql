@@ -1,0 +1,103 @@
+schema_version: 1
+description: Tool descriptions and usage constraints used for runtime and evaluation labels.
+
+tools:
+  - tool_name: list_tables
+    version: 1.1.0
+    enabled_profiles: [sql, hybrid]
+    description: |
+      List all base tables in the Azure SQL database.
+
+      NOTE: Prefer using list_views first. Views are the primary interface for querying
+      data in this project. Use list_tables only when base table visibility is explicitly needed.
+    usage_rules:
+      - Prefer list_views first for discovery in this project.
+      - Use only when underlying base tables are specifically requested.
+      - Database dialect is Azure SQL (T-SQL).
+    examples:
+      - user_prompt: What base tables exist?
+        expected: list_tables
+
+  - tool_name: list_views
+    version: 1.1.0
+    enabled_profiles: [sql, hybrid]
+    description: |
+      PRIMARY SQL DISCOVERY ENTRY POINT.
+
+      List views in schema ai only. This is Step 1 and should generally be called before
+      describe_table or read_query to understand available data objects.
+    usage_rules:
+      - Use first for SQL data discovery.
+      - Use before describe_table and read_query when schema/objects are unknown.
+      - For operational readiness by UIC, prioritize unit-level rollup views across all LINs.
+      - For LIN-specific requests by UIC, prioritize LIN-detail views.
+      - For generic UIC requests, find unit context views first.
+      - Identify timeframe-capable objects/columns before final data query.
+      - Schema parameter is ignored at runtime; query is scoped to ai schema.
+    examples:
+      - user_prompt: What data sources are available for readiness?
+        expected: list_views
+
+  - tool_name: describe_table
+    version: 1.1.0
+    enabled_profiles: [sql, hybrid]
+    description: |
+      STEP 2 schema inspection tool for a specific table/view.
+
+      Returns schema details including column names, data types, max lengths, nullability,
+      primary keys, and foreign keys. Use after discovery and before complex querying.
+    usage_rules:
+      - Use after list_views to confirm queryable fields and relationships.
+      - Use before read_query when filter/group columns are uncertain.
+      - For UIC readiness rollups, confirm object supports whole-unit aggregation.
+      - For LIN-by-UIC questions, confirm both UIC and LIN fields are present.
+    examples:
+      - user_prompt: Show me columns for ai.unit_readiness_rollup.
+        expected: describe_table
+
+  - tool_name: read_query
+    version: 1.1.0
+    enabled_profiles: [sql, hybrid]
+    description: |
+      Execute read-only T-SQL SELECT queries.
+
+      This tool enforces read-only behavior and should follow the SQL workflow:
+      discovery -> schema inspection -> query execution.
+    usage_rules:
+      - Only SELECT statements allowed.
+      - 'Apply intent routing: "operational readiness of UIC ..." => unit-level rollup across all LINs.'
+      - 'Apply intent routing: "about LIN ... for UIC ..." => LIN-level query scoped to that UIC.'
+      - 'Apply intent routing: "tell me about <UIC>" => UIC context + latest readiness-relevant data.'
+      - If timeframe is provided, apply it; otherwise use latest available and state that clearly.
+      - "REQUIRED workflow for filtering/aggregation: Step 3a run DISTINCT on planned filter columns to verify actual values."
+      - "REQUIRED workflow for filtering/aggregation: Step 3b build WHERE/GROUP query only using verified values."
+      - Treat truncation as partial coverage and continue with paged follow-on queries.
+      - Never make absence claims from truncated DISTINCT results.
+      - Block data/schema mutation keywords.
+    examples:
+      - user_prompt: What is the operational readiness of UIC WXYZAA?
+        expected: read_query
+
+  - tool_name: semantic_search
+    version: 1.1.0
+    enabled_profiles: [search, hybrid]
+    description: |
+      Semantic retrieval over indexed maintenance documentation in Azure AI Search.
+
+      Supports natural-language retrieval, optional filter scoping, and field selection.
+      Intended for doctrine/manual/procedure grounding and maintenance-reference lookups.
+    usage_rules:
+      - Use for doctrine/manual/procedure questions.
+      - Use as complement to SQL for policy or maintenance-reference context.
+      - Prefer semantic query_type for Q&A unless simple keyword matching is needed.
+      - If a publication identifier is supplied (for example TM 9-2320-280-10), query exact ID first.
+      - If exact publication query fails, broaden with related terms.
+      - "Interpret TM suffixes when summarizing: -10 operator level."
+      - "Interpret TM suffixes when summarizing: -20/-30 field level."
+      - "Interpret TM suffixes when summarizing: -40/-50 sustainment level."
+      - "Interpret TM suffixes when summarizing: &P parts manual and -HR hand receipt."
+      - If no relevant excerpt is returned, explicitly state no supporting publication text was found.
+      - For procedural queries, prioritize warnings/cautions, setup conditions, and follow-on tasks.
+    examples:
+      - user_prompt: Which TM describes HMMWV oil filter replacement?
+        expected: semantic_search

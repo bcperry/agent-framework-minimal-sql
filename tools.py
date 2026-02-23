@@ -175,44 +175,14 @@ class SqlDatabase:
             raise
 
     def list_tables(self) -> str:
-        """List all base tables in the SQL database.
-
-        NOTE: Prefer using list_views() instead of this tool. Views are the primary
-        interface for querying data in this database. Only use list_tables if you
-        specifically need to see underlying base tables.
-
-        Lists base tables in the Azure SQL (T-SQL) database.
-        """
+        """Tool description is sourced from config/prompts/tools.yaml (tool_name: list_tables)."""
 
         query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
         results = self._execute_query(query)
         return self._format_tool_output(results)
 
     def list_views(self, schema_name: str = "ai") -> str:
-        """List all views in the SQL database for the ai schema only.
-
-        *** STEP 1 - START HERE ***
-        This is the PRIMARY entry point for discovering available data in the Azure SQL (T-SQL) database.
-        ALWAYS use this tool FIRST before describe_table or read_query to understand what views exist.
-
-                Readiness routing guidance:
-                - If user asks for operational readiness of a UIC, prioritize views that provide unit-level rollups
-                    across all LINs.
-                - If user asks about a specific LIN for a UIC, prioritize LIN-level/detail views.
-                - If user asks about a UIC without readiness details, find unit information views first.
-                - Always identify a timeframe view/column path before final query execution.
-
-        Views are the preferred way to access data in this database. They provide:
-        - Pre-defined, optimized queries
-        - Consistent data access patterns
-        - Filtered and transformed data ready for analysis
-
-        After listing views, use describe_table to get column details for a specific view,
-        then use read_query to query the view.
-
-        Args:
-            schema_name: Ignored. Views are always filtered to schema 'ai'.
-        """
+        """Tool description is sourced from config/prompts/tools.yaml (tool_name: list_views)."""
 
         query = (
             "SELECT TABLE_SCHEMA, TABLE_NAME "
@@ -225,18 +195,7 @@ class SqlDatabase:
     def describe_table(
         self, table_name: str = Field(description="The name of the table to describe")
     ) -> str:
-        """Get the schema information for a specific table.
-
-        STEP 2: After using list_tables, you MUST use this to get column names, data types, max lengths,
-        nullability, primary keys, and foreign keys for a specific table in the Azure SQL (T-SQL) database.
-        This information is essential before executing read_query or write_query. This does not require the database schema name.
-
-                Readiness-specific usage:
-                - Use this immediately after list_views to confirm where unit rollups, LIN details, and time references exist.
-                - For UIC operational readiness, verify the selected object supports whole-unit aggregation and does not
-                    limit to a single LIN unless requested.
-                - For unit specific LIN questions, verify the selected object includes both UIC and LIN so results are unit-specific. if required.
-        """
+        """Tool description is sourced from config/prompts/tools.yaml (tool_name: describe_table)."""
         if table_name is None:
             raise ValueError("Missing table_name argument")
 
@@ -374,32 +333,7 @@ class SqlDatabase:
     def read_query(
         self, query: str = Field(description="T-SQL SELECT query to execute")
     ) -> str:
-        """Execute a SELECT query on the SQL database.
-
-        Readiness query intent rules (apply before execution):
-        - User asks "What is the operational readiness of UIC ...": execute a unit-level rollup across all LINs.
-        - User asks "What can you tell me about LIN ... for UIC ...": execute a LIN-level query scoped to that UIC.
-        - User asks "Tell me about <UIC>": retrieve UIC context and latest readiness-relevant data first.
-        - If timeframe is provided, apply it. If not provided, use latest available period and state that clearly.
-
-        REQUIRED WORKFLOW:
-        STEP 3a: First, query distinct values for any columns you plan to filter on.
-                 Example: SELECT DISTINCT status FROM schema.orders
-                 Example: SELECT DISTINCT category FROM alternative_schema.products
-                 This shows you what values actually exist in the database.
-
-        STEP 3b: After verifying actual values exist, construct your filtered query.
-                 Use ONLY the exact values you found in step 3a for WHERE clauses.
-
-        Truncation handling (required):
-        - Tool output can be truncated by row, cell, or payload limits.
-        - If truncation occurs, treat the response as partial.
-        - Never conclude "value does not exist" from a truncated DISTINCT result.
-        - Continue with additional paged SELECT queries until coverage is complete.
-
-        DO NOT skip step 3a. DO NOT assume what values exist. DO NOT filter without first checking.
-        Executes T-SQL SELECT statements on the Azure SQL database.
-        """
+        """Tool description is sourced from config/prompts/tools.yaml (tool_name: read_query)."""
 
         # Normalize the query for checking
         normalized_query = query.strip().upper()

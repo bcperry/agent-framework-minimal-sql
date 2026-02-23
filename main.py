@@ -11,6 +11,8 @@ from agent_framework._types import Message as ChatMessage, Content, UsageDetails
 from tools import SqlDatabase
 from rag_tools import semantic_search
 from custom_oauth import AzureGovOAuthProvider, AzureGovHybridOAuthProvider
+from prompt_config import load_prompt_bundle
+from eval_trace import EvalTraceLogger
 
 load_dotenv()
 
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 AI_SEARCH_BOT_PROFILE = "Technical Maintenance AI"
 SQL_BOT_PROFILE = "Tactical Readiness AI"
+HYBRID_BOT_PROFILE = "Combat LogiGuard AI"
 
 DEFAULT_MAX_THREAD_MESSAGES = int(os.getenv("MAX_THREAD_MESSAGES", "18"))
 DEFAULT_MAX_THREAD_CHARS = int(os.getenv("MAX_THREAD_CHARS", "48000"))
@@ -30,54 +33,6 @@ MAX_CONVERSATION_MESSAGES = int(os.getenv("MAX_CONVERSATION_MESSAGES", "24"))
 USAGE_INPUT_KEY = "input_token_count"
 USAGE_OUTPUT_KEY = "output_token_count"
 USAGE_TOTAL_KEY = "total_token_count"
-
-
-AGENT_SYSTEM_INSTRUCTIONS = """You are an Army operational readiness analyst.
-
-Mission:
-- Answer user questions using authoritative tool results only.
-- Never invent readiness values, statuses, dates, or unit details.
-- If required data is missing, explicitly say what is missing.
-
-Readiness workflow (always apply):
-1. Identify the unit (UIC/LIN/equipment) and timeframe from the user request.
-2. Use tools to retrieve supporting readiness data.
-3. Interpret equipment readiness using Army readiness doctrine:
-     - C1 = Fully mission capable
-     - C2 = Capable with minor limitations
-     - C3 = Significant limitations; requires remediation before deployment
-     - C4 = Not mission capable
-4. Explain results in operational language, not technical implementation terms.
-
-Interpretation guardrails:
-- Equipment below 80% usually impacts deployability.
-- Personnel below 85% risks sustainment.
-- Training below 70% limits mission execution.
-- Always provide:
-    - Overall readiness assessment
-    - Key limiting factors
-    - Operational impact
-
-Tool-output completeness rule:
-- If database/tool output is truncated or partial, do not make absence claims (for example, "not in database").
-- Execute additional follow-on queries (paged/segmented as needed) until coverage is sufficient, then conclude.
-- If complete coverage cannot be established, state that clearly.
-
-Routing intent correctly:
-- For "operational readiness of UIC ...", focus on the unit rollup across all LINs.
-- For "tell me about LIN ... for UIC ...", focus on the most appropriate LIN-level view.
-- For "tell me about <UIC>", find UIC information first, then summarize readiness-relevant context.
-- For LIN references, preserve the exact LIN as provided by the user unless tool data indicates correction.
-
-Technical manual support via search tools:
-- Use search tools for maintenance doctrine/procedures and TM/MWO/TB/LO context.
-- Distinguish operator-level (-10) from field-level (-20/-30 combined) and sustainment-level (-40/-50) maintenance when relevant.
-
-Communication rules:
-- Use clear, concise, doctrinal plain language for non-technical users.
-- Do not mention schemas, table names, SQL, or internal field names unless user explicitly asks.
-- If uncertainty remains after tool use, state uncertainty and what additional data is required.
-"""
 
 
 def _create_usage(
@@ -155,13 +110,19 @@ def _sanitize_endpoint(endpoint: str) -> str:
     return endpoint
 
 
-def _normalize_tools(raw_tools: list[Any]) -> list[Any]:
+def _normalize_tools(
+    raw_tools: list[Any],
+    description_overrides: Optional[dict[str, str]] = None,
+) -> list[Any]:
+    overrides = description_overrides or {}
     normalized: list[Any] = []
     for raw_tool in raw_tools:
         if isinstance(raw_tool, FunctionTool):
             normalized.append(raw_tool)
         elif callable(raw_tool):
-            normalized.append(tool(raw_tool))
+            tool_name = getattr(raw_tool, "__name__", None)
+            description = overrides.get(str(tool_name), None) if tool_name else None
+            normalized.append(tool(raw_tool, description=description))
         else:
             normalized.append(raw_tool)
     return normalized
@@ -267,7 +228,7 @@ async def chat_profile():
             ],
         ),
         cl.ChatProfile(
-            name="Combat LogiGuard AI",
+            name=HYBRID_BOT_PROFILE,
             markdown_description="Get responses grounded on all available data sources.",
             icon="public/logo_dark.png",
             default=True,
@@ -295,6 +256,9 @@ async def on_chat_start():
     cl.user_session.set("conversation_messages", [])
     cl.user_session.set("agent", None)
     cl.user_session.set("secondary_agent", None)
+    cl.user_session.set("prompt_manifest", None)
+    cl.user_session.set("prompt_logical_profile", None)
+    cl.user_session.set("eval_trace_logger", None)
     
     # Reset token usage counter for new chat session
     cl.user_session.set("token_usage", _create_usage())
@@ -415,10 +379,63 @@ async def on_chat_start():
             timeout=120.0,
         )
 
+    db_tools_raw = [
+        db_tool.list_tables,
+        db_tool.list_views,
+        db_tool.describe_table,
+        db_tool.read_query,
+    ]
+    search_tools_raw = [semantic_search]
+
+    available_tool_names = {
+        tool_name
+        for tool_name in [
+            *(getattr(tool_obj, "__name__", None) for tool_obj in db_tools_raw),
+            *(getattr(tool_obj, "__name__", None) for tool_obj in search_tools_raw),
+        ]
+        if isinstance(tool_name, str) and tool_name
+    }
+
+    selected_profile = cl.user_session.get("chat_profile")
+    prompt_bundle = load_prompt_bundle(
+        chat_profile=selected_profile,
+        available_tool_names=available_tool_names,
+    )
+    runtime_instructions = (prompt_bundle.system_prompt or "").strip()
+    if not runtime_instructions:
+        raise ValueError("Loaded prompt config but system prompt text is empty")
+
+    prompt_manifest = prompt_bundle.prompt_manifest
+    prompt_logical_profile = prompt_bundle.logical_profile
+    tool_description_overrides: dict[str, str] = {}
+    for tool_def in prompt_bundle.tools_config.get("tools", []):
+        if not isinstance(tool_def, dict):
+            continue
+        tool_name = tool_def.get("tool_name")
+        description = tool_def.get("description")
+        enabled_profiles = tool_def.get("enabled_profiles") or []
+        if not isinstance(tool_name, str) or not isinstance(description, str):
+            continue
+        if enabled_profiles and prompt_logical_profile not in enabled_profiles:
+            continue
+        tool_description_overrides[tool_name] = description
+
+    db_tools = _normalize_tools(db_tools_raw, tool_description_overrides)
+    search_tools = _normalize_tools(search_tools_raw, tool_description_overrides)
+
+    logger.info(
+        "Loaded prompt config for profile=%s logical_profile=%s manifest=%s",
+        selected_profile,
+        prompt_logical_profile,
+        prompt_manifest,
+    )
+
+    eval_trace_logger = EvalTraceLogger.from_env()
+
     agent = RawAgent(
         client=llm,
         name="agent_name",
-        instructions=AGENT_SYSTEM_INSTRUCTIONS,
+        instructions=runtime_instructions,
     )
 
     # Create secondary agent if fallback LLM is configured
@@ -427,18 +444,8 @@ async def on_chat_start():
         secondary_agent = RawAgent(
             client=secondary_llm,
             name="agent_name_secondary",
-            instructions=AGENT_SYSTEM_INSTRUCTIONS,
+            instructions=runtime_instructions,
         )
-
-    db_tools = [
-        db_tool.list_tables,
-        db_tool.list_views,
-        db_tool.describe_table,
-        db_tool.read_query,
-    ]
-    search_tools = [semantic_search]
-    db_tools = _normalize_tools(db_tools)
-    search_tools = _normalize_tools(search_tools)
 
     session = agent.create_session()
     logger.info("Created new session for chat")
@@ -448,6 +455,9 @@ async def on_chat_start():
     cl.user_session.set("db_tools", db_tools)
     cl.user_session.set("ai_search", search_tools)
     cl.user_session.set("session", session)
+    cl.user_session.set("prompt_manifest", prompt_manifest)
+    cl.user_session.set("prompt_logical_profile", prompt_logical_profile)
+    cl.user_session.set("eval_trace_logger", eval_trace_logger)
 
 
 @cl.on_chat_end
@@ -477,6 +487,9 @@ async def on_chat_end():
     cl.user_session.set("secondary_agent", None)
     cl.user_session.set("token_usage", None)
     cl.user_session.set("context_usage", None)
+    cl.user_session.set("prompt_manifest", None)
+    cl.user_session.set("prompt_logical_profile", None)
+    cl.user_session.set("eval_trace_logger", None)
 
 
 def _is_retryable_error(e: Exception) -> bool:
@@ -640,7 +653,7 @@ async def _run_agent_stream(
     session: AgentSession,
     conversation_messages: list[ChatMessage],
     parent_message_id: str,
-) -> Tuple[Optional[cl.Message], Optional[UsageDetails]]:
+) -> Tuple[Optional[cl.Message], Optional[UsageDetails], dict[str, Any]]:
     """Run agent stream and handle response rendering. Returns the answer message and usage or None.
     
     Args:
@@ -651,13 +664,15 @@ async def _run_agent_stream(
         parent_message_id: The parent message ID for UI steps
     
     Returns:
-        A tuple of (answer message, usage details) - either may be None
+        A tuple of (answer message, usage details, trace payload)
     """
     answer: Optional[cl.Message] = None
     active_steps: dict = {}
     current_call_id: Optional[str] = None
     request_usage: Optional[UsageDetails] = None
     final_text_parts: list[str] = []
+    tool_events: list[dict[str, Any]] = []
+    tool_event_by_call_id: dict[str, dict[str, Any]] = {}
 
     if message_content:
         current_user_message = ChatMessage(
@@ -702,15 +717,26 @@ async def _run_agent_stream(
                 if name:
                     step = cl.Step(name=name, type="tool", parent_id=parent_message_id)
                     step.input = rendered_arguments
+                    event_payload = {
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": rendered_arguments,
+                        "result": None,
+                    }
+                    tool_events.append(event_payload)
                     if call_id:
                         active_steps[call_id] = step
                         current_call_id = call_id
+                        tool_event_by_call_id[call_id] = event_payload
                     await step.send()
                 else:
                     target_id = call_id if call_id else current_call_id
                     if target_id and target_id in active_steps:
                         active_steps[target_id].input += rendered_arguments
                         await active_steps[target_id].update()
+                    if target_id and target_id in tool_event_by_call_id:
+                        existing_args = tool_event_by_call_id[target_id].get("arguments", "")
+                        tool_event_by_call_id[target_id]["arguments"] = f"{existing_args}{rendered_arguments}"
 
             elif content_type == "function_result":
                 call_id = content.get("call_id")
@@ -724,6 +750,8 @@ async def _run_agent_stream(
                     active_steps[call_id].output = rendered_result
                     await active_steps[call_id].update()
                     del active_steps[call_id]
+                if call_id in tool_event_by_call_id:
+                    tool_event_by_call_id[call_id]["result"] = rendered_result
 
             elif content_type == "usage":
                 usage = _extract_usage_from_payload(content)
@@ -750,7 +778,13 @@ async def _run_agent_stream(
     if len(conversation_messages) > MAX_CONVERSATION_MESSAGES:
         del conversation_messages[: len(conversation_messages) - MAX_CONVERSATION_MESSAGES]
 
-    return answer, request_usage
+    trace_payload = {
+        "user_message": message_content,
+        "assistant_message": assistant_text,
+        "tool_events": tool_events,
+    }
+
+    return answer, request_usage, trace_payload
 
 
 @cl.on_message
@@ -782,6 +816,7 @@ async def on_message(message: cl.Message):
 
     answer: Optional[cl.Message] = None
     request_usage: Optional[UsageDetails] = None
+    trace_payload: dict[str, Any] = {}
     used_fallback = False
     prepared_message = _trim_user_input(message.content)
 
@@ -801,7 +836,7 @@ async def on_message(message: cl.Message):
 
     try:
         # Try primary agent first
-        answer, request_usage = await _run_agent_stream(
+        answer, request_usage, trace_payload = await _run_agent_stream(
             agent, prepared_message, tools, session, conversation_messages, message.id
         )
     except Exception as e:
@@ -822,7 +857,7 @@ async def on_message(message: cl.Message):
             ).send()
 
             try:
-                answer, request_usage = await _run_agent_stream(
+                answer, request_usage, trace_payload = await _run_agent_stream(
                     secondary_agent, prepared_message, tools, session, conversation_messages, message.id
                 )
                 used_fallback = True
@@ -882,6 +917,30 @@ async def on_message(message: cl.Message):
         if used_fallback:
             answer.content += "\n\n_Response generated using backup model._"
         await answer.send()
+
+    prompt_manifest = cl.user_session.get("prompt_manifest") or {}
+    prompt_logical_profile = cl.user_session.get("prompt_logical_profile") or "unknown"
+    trace_logger = cl.user_session.get("eval_trace_logger")
+    if isinstance(trace_logger, EvalTraceLogger):
+        trace_logger.log(
+            {
+                "message_id": message.id,
+                "chat_profile": profile or HYBRID_BOT_PROFILE,
+                "prompt_logical_profile": prompt_logical_profile,
+                "prompt_manifest": prompt_manifest,
+                "input": prepared_message,
+                "output": (trace_payload or {}).get("assistant_message", ""),
+                "tool_events": (trace_payload or {}).get("tool_events", []),
+                "tool_names_available": [getattr(tool_obj, "name", str(tool_obj)) for tool_obj in tools],
+                "used_fallback": used_fallback,
+                "usage": {
+                    USAGE_INPUT_KEY: _usage_value(request_usage, USAGE_INPUT_KEY),
+                    USAGE_OUTPUT_KEY: _usage_value(request_usage, USAGE_OUTPUT_KEY),
+                    USAGE_TOTAL_KEY: _usage_value(request_usage, USAGE_TOTAL_KEY),
+                },
+                "context_usage": context_usage,
+            }
+        )
 
     cl.user_session.set("session", session)
     cl.user_session.set("conversation_messages", conversation_messages)

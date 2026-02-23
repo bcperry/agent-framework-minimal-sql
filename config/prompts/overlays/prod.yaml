@@ -1,0 +1,14 @@
+schema_version: 1
+environment: prod
+
+active_profiles:
+  tactical_readiness_ai: sql
+  technical_maintenance_ai: search
+
+manifest:
+  system:
+    sql: { id: tactical_readiness_system, version: 1.0.0 }
+    search: { id: technical_maintenance_system, version: 1.0.0 }
+    hybrid: { id: hybrid_system, version: 1.0.0 }
+  tools: { version: 1.0.0 }
+  eval: { version: 1.0.0 }
