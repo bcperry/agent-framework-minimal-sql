@@ -332,16 +332,22 @@ def _gcc_high_patches(config: dict[str, Any]):
     government AAD endpoint.
     """
     from azure.ai.evaluation._evaluate._utils import LiteMLClient  # type: ignore[import-untyped]
+    from azure.identity import AzureCliCredential  # type: ignore[import-untyped]
 
     GOV_ARM = "management.usgovcloudapi.net"
     GOV_SCOPE = f"https://{GOV_ARM}/.default"
     GOV_AUTHORITY = "https://login.microsoftonline.us"
 
+    # Use AzureCliCredential so the SDK authenticates as the signed-in
+    # user rather than a VM managed identity picked up by
+    # DefaultAzureCredential on Azure-hosted VDI machines.
+    cli_credential = AzureCliCredential()
+
     # --- ARM base URL patch ---
     orig_init = LiteMLClient.__init__
 
     def _patched_init(self, subscription_id, resource_group, logger, credential=None, **kwargs):
-        orig_init(self, subscription_id, resource_group, logger, credential=credential, **kwargs)
+        orig_init(self, subscription_id, resource_group, logger, credential=cli_credential, **kwargs)
         self._base_url = self._base_url.replace("management.azure.com", GOV_ARM)
 
     # --- Token scope patch ---
