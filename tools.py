@@ -3,6 +3,7 @@ import os
 import re
 import struct
 import sys
+import time
 
 from pydantic import Field
 import pyodbc
@@ -10,16 +11,6 @@ from contextlib import closing
 from typing import Any
 
 from azure.identity import DefaultAzureCredential, AzureCliCredential
-
-
-# # Load environment variables from .env file (for local development)
-# load_dotenv()
-
-# # Get connection string from environment
-# connection_string = os.environ.get("AZURE_SQL_CONNECTIONSTRING")
-# print(f"Connected using: {connection_string}")
-# if not connection_string:
-#     raise ValueError("AZURE_SQL_CONNECTIONSTRING environment variable is required")
 
 
 logger = logging.getLogger("tools")
@@ -40,6 +31,30 @@ def _env_int(name: str, default: int) -> int:
 MAX_QUERY_RESULT_ROWS = _env_int("MAX_QUERY_RESULT_ROWS", 100)
 MAX_QUERY_RESULT_CHARS = _env_int("MAX_QUERY_RESULT_CHARS", 12000)
 MAX_SQL_CELL_CHARS = _env_int("MAX_SQL_CELL_CHARS", 1200)
+MAX_LOG_QUERY_CHARS = _env_int("MAX_LOG_QUERY_CHARS", 500)
+
+
+def _mask_connection_string(connection_string: str) -> str:
+    redacted = re.sub(r"(?i)(password|pwd)\s*=\s*[^;]+", r"\1=***", connection_string)
+    redacted = re.sub(r"(?i)(user id|uid)\s*=\s*[^;]+", r"\1=***", redacted)
+    return redacted
+
+
+def _compact_sql_for_logs(query: str) -> str:
+    compacted = " ".join(query.strip().split())
+    return _truncate_text(compacted, MAX_LOG_QUERY_CHARS, "SQL LOG")
+
+
+def _summarize_params_for_logs(params: Any | None) -> str:
+    if params is None:
+        return "none"
+    if isinstance(params, tuple):
+        return f"tuple(len={len(params)})"
+    if isinstance(params, list):
+        return f"list(len={len(params)})"
+    if isinstance(params, dict):
+        return f"dict(keys={list(params.keys())})"
+    return type(params).__name__
 
 
 def _get_token_struct(token: str) -> bytes:
@@ -67,12 +82,25 @@ class SqlDatabase:
         self._credential = None
         self._last_query_truncated = False
         self._last_output_truncated = False
+        self._query_counter = 0
         # self._init_credential()
+        logger.info(
+            "SqlDatabase init: max_rows=%s max_result_chars=%s max_cell_chars=%s",
+            MAX_QUERY_RESULT_ROWS,
+            MAX_QUERY_RESULT_CHARS,
+            MAX_SQL_CELL_CHARS,
+        )
         self.get_conn()
 
     def _format_tool_output(self, payload: Any) -> str:
         rendered = str(payload)
         self._last_output_truncated = len(rendered) > MAX_QUERY_RESULT_CHARS
+        if self._last_output_truncated:
+            logger.warning(
+                "Tool output truncated at %s chars (original=%s chars)",
+                MAX_QUERY_RESULT_CHARS,
+                len(rendered),
+            )
         return _truncate_text(rendered, MAX_QUERY_RESULT_CHARS, "SQL RESULT")
 
     def _is_distinct_query(self, normalized_query: str) -> bool:
@@ -119,6 +147,13 @@ class SqlDatabase:
             logger.info("Using Azure CLI credential for SQL authentication")
 
     def get_conn(self):
+        start = time.perf_counter()
+        auth_mode = "token" if self._credential else "connection_string"
+        logger.debug(
+            "Opening SQL connection (auth_mode=%s, connection=%s)",
+            auth_mode,
+            _mask_connection_string(self.connection_string),
+        )
         try:
             if self._credential:
                 # Get token for Azure SQL / Synapse
@@ -128,16 +163,27 @@ class SqlDatabase:
                 conn = pyodbc.connect(self.connection_string, attrs_before={1256: token_struct})
             else:
                 conn = pyodbc.connect(self.connection_string)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.debug("SQL connection opened in %.2f ms", elapsed_ms)
             return conn
         except Exception as e:
-            logger.error(f"Database connection error: {e}")
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.error("Database connection error after %.2f ms: %s", elapsed_ms, e)
             raise
 
     def _execute_query(
         self, query: str, params: Any | None = None
     ) -> list[dict[str, Any]]:
         """Execute a SQL query and return results as a list of dictionaries"""
-        logger.debug(f"Executing query: {query}")
+        self._query_counter += 1
+        query_id = self._query_counter
+        query_start = time.perf_counter()
+        logger.info(
+            "[SQL %s] Executing query (params=%s): %s",
+            query_id,
+            _summarize_params_for_logs(params),
+            _compact_sql_for_logs(query),
+        )
         self._last_query_truncated = False
         self._last_output_truncated = False
         try:
@@ -157,21 +203,40 @@ class SqlDatabase:
                     ):
                         conn.commit()
                         affected = cursor.rowcount
-                        logger.debug(f"Write query affected {affected} rows")
+                        elapsed_ms = (time.perf_counter() - query_start) * 1000
+                        logger.info(
+                            "[SQL %s] Write query complete in %.2f ms (affected_rows=%s)",
+                            query_id,
+                            elapsed_ms,
+                            affected,
+                        )
                         return [{"affected_rows": affected}]
                     columns = [column[0] for column in cursor.description]
                     rows = cursor.fetchmany(MAX_QUERY_RESULT_ROWS + 1)
                     if len(rows) > MAX_QUERY_RESULT_ROWS:
                         self._last_query_truncated = True
+                        logger.warning(
+                            "[SQL %s] Row truncation applied at max_rows=%s",
+                            query_id,
+                            MAX_QUERY_RESULT_ROWS,
+                        )
                         rows = rows[:MAX_QUERY_RESULT_ROWS]
                     results = [
                         dict(zip(columns, (_sanitize_cell_value(cell) for cell in row)))
                         for row in rows
                     ]
-                    logger.debug(f"Read query returned {len(results)} rows")
+                    elapsed_ms = (time.perf_counter() - query_start) * 1000
+                    logger.info(
+                        "[SQL %s] Read query complete in %.2f ms (rows=%s, columns=%s)",
+                        query_id,
+                        elapsed_ms,
+                        len(results),
+                        len(columns),
+                    )
                     return results
         except Exception as e:
-            logger.error(f"Database error executing query: {e}")
+            elapsed_ms = (time.perf_counter() - query_start) * 1000
+            logger.error("[SQL %s] Query failed after %.2f ms: %s", query_id, elapsed_ms, e)
             raise
 
     def list_tables(self) -> str:
@@ -340,6 +405,7 @@ class SqlDatabase:
 
         # Only allow SELECT statements
         if not normalized_query.startswith("SELECT"):
+            logger.warning("read_query rejected non-SELECT query: %s", _compact_sql_for_logs(query))
             raise ValueError("Only SELECT queries are allowed for read_query")
 
         # Check if this is a filtered/aggregation query without having checked distinct values first
@@ -371,6 +437,7 @@ class SqlDatabase:
 
         for keyword in dangerous_keywords:
             if keyword in normalized_query:
+                logger.warning("read_query rejected query containing blocked keyword '%s'", keyword)
                 raise ValueError(
                     f"Keyword '{keyword}' is not allowed in read-only queries"
                 )
@@ -416,7 +483,3 @@ class SqlDatabase:
             )
         else:
             return f"{rendered_results}{truncation_note}"
-
-
-# # from sqlite_db import SqliteDatabase
-# db = SqlDatabase(connection_string)
