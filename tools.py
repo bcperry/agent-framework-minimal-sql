@@ -32,6 +32,7 @@ MAX_QUERY_RESULT_ROWS = _env_int("MAX_QUERY_RESULT_ROWS", 100)
 MAX_QUERY_RESULT_CHARS = _env_int("MAX_QUERY_RESULT_CHARS", 12000)
 MAX_SQL_CELL_CHARS = _env_int("MAX_SQL_CELL_CHARS", 1200)
 MAX_LOG_QUERY_CHARS = _env_int("MAX_LOG_QUERY_CHARS", 500)
+MAX_LOG_TOOL_RESULT_CHARS = _env_int("MAX_LOG_TOOL_RESULT_CHARS", 100)
 
 
 def _mask_connection_string(connection_string: str) -> str:
@@ -55,6 +56,14 @@ def _summarize_params_for_logs(params: Any | None) -> str:
     if isinstance(params, dict):
         return f"dict(keys={list(params.keys())})"
     return type(params).__name__
+
+
+def _preview_tool_result_for_logs(value: Any) -> str:
+    raw = str(value)
+    compact = " ".join(raw.split())
+    if len(compact) <= MAX_LOG_TOOL_RESULT_CHARS:
+        return compact
+    return f"{compact[:MAX_LOG_TOOL_RESULT_CHARS]}..."
 
 
 def _get_token_struct(token: str) -> bytes:
@@ -205,10 +214,11 @@ class SqlDatabase:
                         affected = cursor.rowcount
                         elapsed_ms = (time.perf_counter() - query_start) * 1000
                         logger.info(
-                            "[SQL %s] Write query complete in %.2f ms (affected_rows=%s)",
+                            "[SQL %s] Write query complete in %.2f ms (affected_rows=%s, result_preview=%s)",
                             query_id,
                             elapsed_ms,
                             affected,
+                            _preview_tool_result_for_logs({"affected_rows": affected}),
                         )
                         return [{"affected_rows": affected}]
                     columns = [column[0] for column in cursor.description]
@@ -227,11 +237,12 @@ class SqlDatabase:
                     ]
                     elapsed_ms = (time.perf_counter() - query_start) * 1000
                     logger.info(
-                        "[SQL %s] Read query complete in %.2f ms (rows=%s, columns=%s)",
+                        "[SQL %s] Read query complete in %.2f ms (rows=%s, columns=%s, result_preview=%s)",
                         query_id,
                         elapsed_ms,
                         len(results),
                         len(columns),
+                        _preview_tool_result_for_logs(results),
                     )
                     return results
         except Exception as e:

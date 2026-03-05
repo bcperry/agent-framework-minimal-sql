@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -47,6 +48,33 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
 )
 logger = logging.getLogger("generate_traces")
+
+
+def _slug(value: Any, fallback: str = "na") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return fallback
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-._")
+    return text or fallback
+
+
+def _build_trace_run_dir(
+    results_root: Path,
+    model: str,
+    temperature: Optional[float],
+    top_p: Optional[float],
+) -> Path:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    temp_label = "default" if temperature is None else str(temperature)
+    top_p_label = "default" if top_p is None else str(top_p)
+    folder_name = (
+        f"traces-{ts}"
+        f"__model-{_slug(model, 'unknown')}"
+        f"__temp-{_slug(temp_label)}"
+        f"__top-p-{_slug(top_p_label)}"
+    )
+    return results_root / folder_name
 
 # --------------------------------------------------------------------------- #
 # Profile → tool mapping (mirrors main.py logic)
@@ -322,6 +350,12 @@ async def generate(
         deployment, temperature, top_p,
     )
 
+    results_root = Path("eval/results")
+    run_dir = _build_trace_run_dir(results_root, deployment, temperature, top_p)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run_trace_path = run_dir / output_path.name
+    run_metadata_path = run_dir / "run_metadata.json"
+
     async_client = AsyncAzureOpenAI(
         azure_endpoint=endpoint,
         azure_deployment=deployment,
@@ -369,8 +403,9 @@ async def generate(
 
     succeeded = 0
     failed = 0
+    prompt_versions_seen: dict[str, str] = {}
 
-    with output_path.open("w", encoding="utf-8") as out:
+    with output_path.open("w", encoding="utf-8") as out, run_trace_path.open("w", encoding="utf-8") as run_out:
         for idx, row in enumerate(gold_rows, 1):
             case_id = row.get("case_id", f"row_{idx}")
             query = row.get("query", "")
@@ -401,7 +436,12 @@ async def generate(
             trace["top_p"] = top_p
             trace["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
 
+            for prompt_key, prompt_value in (kit.prompt_manifest or {}).items():
+                if prompt_key not in prompt_versions_seen:
+                    prompt_versions_seen[prompt_key] = str(prompt_value)
+
             out.write(json.dumps(trace, ensure_ascii=False) + "\n")
+            run_out.write(json.dumps(trace, ensure_ascii=False) + "\n")
 
             if trace.get("error"):
                 failed += 1
@@ -409,10 +449,23 @@ async def generate(
                 succeeded += 1
 
             tool_names_used = [e["name"] for e in trace.get("tool_events", []) if e.get("name")]
+            tool_result_previews: list[str] = []
+            for event in trace.get("tool_events", []):
+                if not isinstance(event, dict):
+                    continue
+                event_name = str(event.get("name") or "tool")
+                result_text = str(event.get("result") or "")
+                preview = result_text[:100]
+                if len(result_text) > 100:
+                    preview += "..."
+                if preview:
+                    tool_result_previews.append(f"{event_name}: {preview}")
+
             response_preview = (trace.get("output") or "")[:100]
             logger.info(
-                "    -> tools=%s  response=%s%s",
+                "    -> tools=%s  tool_results=%s  response=%s%s",
                 tool_names_used or "(none)",
+                tool_result_previews or "(none)",
                 response_preview,
                 "..." if len(trace.get("output", "")) > 100 else "",
             )
@@ -425,6 +478,25 @@ async def generate(
         "Done. %d succeeded, %d failed. Traces written to %s",
         succeeded, failed, output_path,
     )
+    logger.info("Run-scoped traces written to %s", run_trace_path)
+
+    run_metadata = {
+        "run_type": "traces",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "model": deployment,
+        "temperature": temperature,
+        "top_p": top_p,
+        "profile_filter": profile_filter,
+        "inter_query_delay": inter_query_delay,
+        "prompt_versions": prompt_versions_seen,
+        "paths": {
+            "legacy_output_jsonl": str(output_path),
+            "run_output_jsonl": str(run_trace_path),
+        },
+    }
+    with run_metadata_path.open("w", encoding="utf-8") as handle:
+        json.dump(run_metadata, handle, ensure_ascii=False, indent=2)
+    logger.info("Run metadata written to %s", run_metadata_path)
 
 
 def main() -> None:

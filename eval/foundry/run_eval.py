@@ -3,6 +3,7 @@ import contextlib
 import importlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,79 @@ from dotenv import load_dotenv
 
 
 load_dotenv()
+
+
+def _slug(value: Any, fallback: str = "na") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return fallback
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-._")
+    return text or fallback
+
+
+def _build_eval_run_dir(results_root: Path, run_meta: dict[str, Any]) -> Path:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    model = _slug(run_meta.get("model"), "unknown")
+    temp = _slug(run_meta.get("temperature", "default"), "default")
+    top_p = _slug(run_meta.get("top_p", "default"), "default")
+    folder_name = f"eval-{ts}__model-{model}__temp-{temp}__top-p-{top_p}"
+    return results_root / folder_name
+
+
+def _is_trace_run_folder(path: Path) -> bool:
+    return path.name.startswith("traces-")
+
+
+def _resolve_eval_artifact_dir(
+    traces_path: Path,
+    run_meta: dict[str, Any],
+    results_root: Path,
+) -> tuple[Path, str]:
+    trace_parent = traces_path.parent
+    if traces_path.name == "agent_runs.jsonl" and _is_trace_run_folder(trace_parent):
+        return trace_parent, "trace_run_folder"
+    return _build_eval_run_dir(results_root, run_meta), "eval_run_folder"
+
+
+def _find_latest_run_trace_jsonl(results_root: Path) -> Path | None:
+    candidates = list(results_root.glob("traces-*__model-*__temp-*__top-p-*/agent_runs.jsonl"))
+    if not candidates:
+        candidates = list(results_root.glob("traces-*/agent_runs.jsonl"))
+    if not candidates:
+        return None
+
+    ts_pattern = re.compile(r"^traces-(\d{8}-\d{6})")
+
+    def _sort_key(path: Path) -> tuple[str, float]:
+        match = ts_pattern.match(path.parent.name)
+        ts = match.group(1) if match else ""
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (ts, mtime)
+
+    return max(candidates, key=_sort_key)
+
+
+def _resolve_traces_path(configured_raw: Any) -> tuple[Path, str]:
+    default_path = Path("eval/traces/agent_runs.jsonl")
+    configured_path = Path(str(configured_raw or default_path))
+    results_root = Path("eval/results")
+    latest_run_trace = _find_latest_run_trace_jsonl(results_root)
+
+    configured_text = "" if configured_raw is None else str(configured_raw).strip()
+    configured_is_default = (
+        configured_raw is None
+        or configured_text == ""
+        or Path(configured_text).as_posix() == default_path.as_posix()
+    )
+
+    if latest_run_trace and (configured_is_default or not configured_path.exists()):
+        return latest_run_trace, "latest_run_folder"
+
+    return configured_path, "configured_path"
 
 
 @dataclass
@@ -435,6 +509,8 @@ def _run_portal_logged_evaluation(
     rows: list[EvalRow],
     config: dict[str, Any],
     model_config: dict[str, str] | None,
+    portal_input_path: Path,
+    portal_output_path: Path,
 ) -> dict[str, Any]:
     if not rows:
         return {"enabled": False, "status": "skipped", "reason": "no_eval_rows"}
@@ -445,10 +521,6 @@ def _run_portal_logged_evaluation(
     project = _resolve_project(config)
     if not project:
         return {"enabled": False, "status": "skipped", "reason": "missing_project_scope"}
-
-    paths = _as_dict(config.get("paths"))
-    portal_input_path = Path(str(paths.get("portal_input_jsonl") or "eval/results/foundry_portal_input.jsonl"))
-    portal_output_path = Path(str(paths.get("portal_output_json") or "eval/results/foundry_portal_eval.json"))
 
     _write_portal_input_jsonl(rows, portal_input_path)
 
@@ -630,10 +702,12 @@ def run(config_path: Path) -> dict[str, Any]:
     config = _load_yaml(config_path)
 
     paths = _as_dict(config.get("paths"))
-    traces_path = Path(str(paths.get("traces_jsonl") or "eval/traces/agent_runs.jsonl"))
+    traces_path, traces_path_source = _resolve_traces_path(paths.get("traces_jsonl"))
     gold_path = Path(str(paths.get("gold_jsonl") or "eval/datasets/sql_agent_gold_starter.jsonl"))
     tools_yaml_path = Path(str(paths.get("tool_config_yaml") or "config/prompts/tools.yaml"))
     output_path = Path(str(paths.get("output_json") or "eval/results/foundry_eval_latest.json"))
+    portal_input_path = Path(str(paths.get("portal_input_jsonl") or "eval/results/foundry_portal_input.jsonl"))
+    portal_output_path = Path(str(paths.get("portal_output_json") or "eval/results/foundry_portal_eval.json"))
 
     matching = _as_dict(config.get("matching"))
     skip_unmatched = bool(matching.get("skip_unmatched_traces", True))
@@ -649,6 +723,16 @@ def run(config_path: Path) -> dict[str, Any]:
 
     tool_definitions = _build_tool_definitions(tools_yaml)
     eval_rows, unmatched = _build_eval_rows(traces, gold_rows, tool_definitions, skip_unmatched)
+    run_meta = _extract_run_metadata(eval_rows)
+
+    results_root = Path("eval/results")
+    run_dir, run_dir_source = _resolve_eval_artifact_dir(traces_path, run_meta, results_root)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    run_output_path = run_dir / output_path.name
+    run_portal_input_path = run_dir / portal_input_path.name
+    run_portal_output_path = run_dir / portal_output_path.name
+    run_metadata_path = run_dir / "eval_run_metadata.json"
 
     deterministic_rows: list[dict[str, Any]] = []
     if include_deterministic:
@@ -664,7 +748,13 @@ def run(config_path: Path) -> dict[str, Any]:
     if include_portal_logging:
         if model_config is None:
             model_config = _build_model_config(config)
-        portal_eval = _run_portal_logged_evaluation(eval_rows, config, model_config)
+        portal_eval = _run_portal_logged_evaluation(
+            eval_rows,
+            config,
+            model_config,
+            run_portal_input_path,
+            run_portal_output_path,
+        )
 
     row_results: list[dict[str, Any]] = []
     for index, row in enumerate(eval_rows):
@@ -690,9 +780,16 @@ def run(config_path: Path) -> dict[str, Any]:
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "paths": {
             "traces_jsonl": str(traces_path),
+            "traces_path_source": traces_path_source,
             "gold_jsonl": str(gold_path),
             "tool_config_yaml": str(tools_yaml_path),
             "output_json": str(output_path),
+            "run_artifact_dir": str(run_dir),
+            "run_artifact_dir_source": run_dir_source,
+            "run_output_json": str(run_output_path),
+            "run_portal_input_jsonl": str(run_portal_input_path),
+            "run_portal_output_json": str(run_portal_output_path),
+            "run_metadata_json": str(run_metadata_path),
         },
         "counts": {
             "trace_rows": len(traces),
@@ -709,6 +806,26 @@ def run(config_path: Path) -> dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         json.dump(output, handle, ensure_ascii=False, indent=2)
+
+    with run_output_path.open("w", encoding="utf-8") as handle:
+        json.dump(output, handle, ensure_ascii=False, indent=2)
+
+    run_metadata = {
+        "run_type": "eval",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "model": run_meta.get("model"),
+        "temperature": run_meta.get("temperature"),
+        "top_p": run_meta.get("top_p"),
+        "prompt_versions": run_meta.get("prompt_versions") or {},
+        "paths": {
+            "legacy_output_json": str(output_path),
+            "run_output_json": str(run_output_path),
+            "run_portal_input_jsonl": str(run_portal_input_path),
+            "run_portal_output_json": str(run_portal_output_path),
+        },
+    }
+    with run_metadata_path.open("w", encoding="utf-8") as handle:
+        json.dump(run_metadata, handle, ensure_ascii=False, indent=2)
 
     return output
 

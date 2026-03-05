@@ -18,9 +18,11 @@ dependencies = [
 dev = [
     "ipykernel>=7.1.0",
     "mypy>=1.19.1",
-    "pre-commit>=4.4.0",   
+    "pre-commit>=4.4.0",
     "azure-ai-evaluation>=1.11.0",
     "pytest>=9.0.2",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]
 
 [tool.uv]

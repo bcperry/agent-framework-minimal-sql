@@ -198,11 +198,35 @@ uv run pre-commit run --all-files
 
 ## Evaluation
 
-Foundry evaluation scaffold is available under `eval/foundry/`.
+Evaluation and experiment artifacts are stored under `eval/results/`.
+
+### Generate traces only
+
+```powershell
+uv run python eval/generate_traces.py --delay 1 --model gpt-4.1
+```
+
+### Run eval only (uses latest run-scoped traces by default)
 
 ```powershell
 uv run python eval/foundry/run_eval.py --config eval/foundry/config.yaml
 ```
+
+### One-command option: generate traces + run eval
+
+Use `eval/generate_and_eval.py` when you want both steps in one run.
+It accepts the same generation args as `eval/generate_traces.py`:
+`--gold`, `--out`, `--profile`, `--delay`, `--model`, `--temperature`, `--top-p`.
+
+```powershell
+uv run python eval/generate_and_eval.py --model gpt-4.1-mini --delay 1
+```
+
+### Explore results across all experiments
+
+Open `eval/results_explorer.ipynb` to compare all runs under `eval/results/traces-*`.
+The notebook auto-discovers runs, aggregates metrics across models/params/prompts,
+renders comparison tables and charts, and writes combined outputs to `eval/results/combined/`.
 
 ## Troubleshooting
 

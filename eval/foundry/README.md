@@ -20,7 +20,8 @@ This scaffold evaluates agent traces against your gold dataset and writes a resu
 
 - Config: `eval/foundry/config.yaml`
 - Runner: `eval/foundry/run_eval.py`
-- Output: `eval/results/foundry_eval_latest.json`
+- Output (latest): `eval/results/foundry_eval_latest.json`
+- Output (run-scoped): written into the selected trace run folder (e.g. `eval/results/traces-<...>/`)
 
 ## Run
 
@@ -32,7 +33,8 @@ The runner loads environment variables from the workspace `.env` file.
 
 ## Required input files
 
-- `eval/traces/agent_runs.jsonl` (from runtime trace logging)
+- Newest `eval/results/traces-*/agent_runs.jsonl` (auto-selected by default)
+- `eval/traces/agent_runs.jsonl` (legacy fallback path)
 - `eval/datasets/sql_agent_gold_starter.jsonl` (gold labels)
 - `config/prompts/tools.yaml` (tool definitions source of truth)
 
@@ -55,13 +57,16 @@ To log the evaluation in the Foundry portal (and get a `studio_url` in output), 
 - `AZURE_AI_PROJECT_CONNECTION_STRING` (fallback when endpoint is not exposed in your UI)
 
 When enabled (`log_to_foundry_portal: true` in config), the runner submits a portal-backed
-evaluation and writes:
+evaluation and writes inside the selected trace run folder:
 
-- `eval/results/foundry_portal_input.jsonl`
-- `eval/results/foundry_portal_eval.json`
+- `foundry_portal_input.jsonl`
+- `foundry_portal_eval.json`
 
 The consolidated local output `eval/results/foundry_eval_latest.json` includes a
 `portal_evaluation` section with status, metrics summary, and `studio_url` when available.
+
+Each run-scoped folder also includes `eval_run_metadata.json` with model, prompt versions,
+temperature/top_p, and timestamp.
 
 ## Notes
 

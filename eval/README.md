@@ -80,7 +80,10 @@ uv run python eval/generate_traces.py --profile "Tactical Readiness AI" --delay 
 | `--temperature` | *(model default)* | Sampling temperature (0.0–2.0) |
 | `--top-p` | *(model default)* | Nucleus sampling cutoff (0.0–1.0) |
 
-**Output:** `eval/traces/agent_runs.jsonl` — one JSON line per query with the agent's response and tool calls.
+**Output:**
+- `eval/traces/agent_runs.jsonl` (legacy/latest path kept for compatibility)
+- `eval/results/traces-<timestamp>__model-...__temp-...__top-p-.../agent_runs.jsonl`
+- `eval/results/traces-<...>/run_metadata.json` (model, temp, top_p, prompt versions, timestamp)
 
 ---
 
@@ -91,6 +94,10 @@ This scores every trace against the gold labels and uploads results to Azure AI 
 ```powershell
 uv run python eval/foundry/run_eval.py --config eval/foundry/config.yaml
 ```
+
+By default, the runner now auto-selects the newest run-scoped traces file from
+`eval/results/traces-*/agent_runs.jsonl` when `paths.traces_jsonl` is left at its
+default value. If none exist, it falls back to `eval/traces/agent_runs.jsonl`.
 
 **What happens:**
 
@@ -108,8 +115,12 @@ uv run python eval/foundry/run_eval.py --config eval/foundry/config.yaml
 3. **Portal upload** — all metrics + per-row details are pushed to Foundry.
 
 **Output:**
-- `eval/results/foundry_eval_latest.json` — full local results
-- `eval/results/foundry_portal_eval.json` — portal-formatted results
+- `eval/results/foundry_eval_latest.json` (legacy/latest path)
+- run-scoped eval artifacts are written into the same trace folder that provided `agent_runs.jsonl` (for example `eval/results/traces-<...>/`):
+   - `foundry_eval_latest.json`
+   - `foundry_portal_input.jsonl`
+   - `foundry_portal_eval.json`
+   - `eval_run_metadata.json` (model, temp, top_p, prompt versions, timestamp)
 - Console prints a **studio_url** you can click to view in the portal
 
 ---
